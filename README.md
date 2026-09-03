@@ -17,11 +17,9 @@ data Failure
     NoSuchNote(id)
     Taken(title)
 
-type Fail = Failure
-
 val app = api()
 
-app.failures(Fail, (f: Failure) -> f match
+app.failures(Failure, (f: Failure) -> f match
     NoSuchNote(id) -> problem(404, "Not Found", "there is no note " + id)
     Taken(title) -> problem(409, "Conflict", "that title is taken", { taken: title }))
 
@@ -116,12 +114,15 @@ app.post("/notes", stack([logger(print), bearer(check), body(NewNote)])(create))
 promise, so a verifier that asks a database is an ordinary one. This package holds no opinion about
 what a token is.
 
-## `type Fail = Failure`, and why the alias is there
+## The failure type is passed by its own name
 
-**A `data` name binds the data type, which is not a shape value**, so `Failure.test` does not exist.
-`api.failures` needs something with a `test` on it — that is how `handle` tells a returned failure
-from a response — and `type Fail = Failure` is the spelling that provides one. The annotation on the
-mapping stays `(f: Failure)`, which is what the exhaustiveness check reads.
+`api.failures` takes the type itself: a `data` name is a shape value, so `Failure.test` is how
+`handle` tells a returned failure from a response. The annotation on the mapping is `(f: Failure)`,
+which is what the exhaustiveness check reads — one name doing both jobs.
+
+**It was `type Fail = Failure` until slate 0.0.24.** A `data` name bound a plain object with no shape
+near it, so every application declared an alias of a name that was already a type to get past an
+annotation. That was reported from here and fixed in the compiler rather than worked around.
 
 ## What a failure costs, and what it buys
 

@@ -8,15 +8,13 @@ data Failure
     NoSuchNote(id)
     Taken(title)
 
-type Fail = Failure
-
 // The arm for `Taken` is missing, and that is the whole of this file.
 answer(f: Failure) = f match
     NoSuchNote(id) -> { status: 404, body: "no note " + id }
 
 val app = api()
 
-app.failures(Fail, answer)
+app.failures(Failure, answer)
 
 app.post("/notes", (req) -> Taken("first"))
 

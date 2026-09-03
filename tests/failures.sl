@@ -10,11 +10,6 @@ data Failure
     Taken(title)
     NotYours
 
-// **`type Fail = Failure` is what turns the data type into a shape VALUE.** A `data` name binds the
-// data type and is not one of these, so the alias is how `handle` is handed something with a `test`
-// on it. See this package's README.
-type Fail = Failure
-
 answer(f: Failure) = f match
     NoSuchNote(id) -> { status: 404, body: "no note " + id }
     Taken(title) -> { status: 409, body: title + " is taken" }
@@ -23,7 +18,7 @@ answer(f: Failure) = f match
 made() -> object
     val app = api()
 
-    app.failures(Fail, answer)
+    app.failures(Failure, answer)
 
     app.get("/notes/:id", (req) ->
         if req.params.id == "7" then json({ id: 7 }, 200) else NoSuchNote(req.params.id))
@@ -72,7 +67,7 @@ async THE_MAPPING_MAY_ANSWER_A_PROMISE()
 
     val app = api()
 
-    app.failures(Fail, slowly)
+    app.failures(Failure, slowly)
     app.get("/notes/:id", (req) -> NoSuchNote(req.params.id))
 
     assertEq(await app.handle(request("GET", "/notes/9")), { status: 404, body: "no note 9" })
@@ -91,7 +86,7 @@ async A_MAPPING_THAT_FAULTS_IS_A_DEFECT_AND_ANSWERS_500()
 
     val app = api({ onFault: noted })
 
-    app.failures(Fail, breaking)
+    app.failures(Failure, breaking)
     app.get("/notes/:id", (req) -> NoSuchNote(req.params.id))
 
     assertEq(status(await app.handle(request("GET", "/notes/9"))), 500)
@@ -105,7 +100,7 @@ async THE_MAPPING_RUNS_UNDER_THE_GUARDS_SO_EVERY_ONE_OF_THEM_SEES_HTTP()
     var seen = []
     val app = api()
 
-    app.failures(Fail, answer)
+    app.failures(Failure, answer)
     app.post("/notes", logger((r) -> push(seen, r), (req) -> Taken("first")))
 
     assertEq(await app.handle(request("POST", "/notes")), { status: 409, body: "first is taken" })
@@ -118,7 +113,7 @@ async A_GUARD_THAT_READS_THE_ANSWER_DOES_NOT_HIDE_A_FAILURE_FROM_THE_MAPPING()
     // `200` with a rendered data value in the body.
     val app = api()
 
-    app.failures(Fail, answer)
+    app.failures(Failure, answer)
     app.post("/notes", cors({}, (req) -> Taken("first")))
 
     val r = await app.handle(request("POST", "/notes", { headers: { Origin: "https://a.example" } }))

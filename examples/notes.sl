@@ -20,10 +20,6 @@ data Failure
     NoSuchNote(id)
     Taken(title)
 
-// **`type Fail = Failure` is what makes the data type a shape value**, which is what `failures` is
-// given so that `handle` can tell a failure from a response.
-type Fail = Failure
-
 // The store, which a real program would have somewhere else.
 var notes = {}
 var nextId = 1
@@ -31,7 +27,9 @@ var nextId = 1
 async main()
     val app = api()
 
-    app.failures(Fail, answer)
+    // The data type itself is what `failures` is given -- a `data` name is a shape value, which is
+    // how `handle` tells a returned failure from a response.
+    app.failures(Failure, answer)
 
     app.get("/notes", (req) -> json(values(notes)))
 
