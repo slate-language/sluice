@@ -82,6 +82,24 @@ async A_MISSING_NOTE_IS_A_404()
 | `cors(options, handler)` | the headers a browser needs, and a preflight answered without the handler running |
 | `logger(sink, handler)` | `sink({ method, path, status, ms })` once the answer is known |
 
+**`logger`'s sink is a function of a record, which is exactly what
+[logger](https://github.com/slate-language/logger) takes**, so the two fit with nothing between
+them — no adapter, no line of text built in the wrong place:
+
+```slate
+import { api, logger } from sluice
+import { info, setLevel, setSink, json } from logger
+
+setLevel("info")
+setSink((r) -> print(json(r)))
+
+app.get("/notes", logger((r) -> info("request", r), handler))
+```
+
+```
+{"time":"2026-09-03T18:25:57Z","level":"info","message":"request","method":"GET","path":"/notes","status":200,"ms":0}
+```
+
 **Each takes the handler last, and each may be given none** — in which case it answers the guard
 itself, which is what goes in a `stack`. The two spellings differ in how they read and in nothing
 else:
@@ -138,8 +156,12 @@ slate examples/notes.sl
 program — and they are not under `tests/` because passing would mean ending the run.
 
 **It needs slate 0.0.22 or later.** Shape values with `test`/`mismatch`/`name` are what make a
-declaration the validator; `?` optional keys are what let a request body have one; both arrived in
-0.0.7.
+declaration the validator, and `?` optional keys are what let a request body have one; both arrived
+in 0.0.7.
+
+**It depends on [logger](https://github.com/slate-language/logger) 0.1.0**, which the example and one
+test use. slate has no notion of a dependency that is only for a suite, so it arrives with the
+package — it is one file of pure slate with no host in it.
 
 **`slate test --js` does not run this suite yet**: `monotonic`, which `logger` times a request with,
 is one of the builtins the JavaScript back end still owes.

@@ -6,6 +6,7 @@
 // bound 8080 would fail whenever the machine is already running a server, which is most of the time.
 
 import { api, stack, body, logger, problem, json, request } from "../sluice.sl"
+import { info } from logger
 import { serve, close } from slate:http
 import { localPort } from slate:net
 
@@ -96,7 +97,9 @@ without(o: object, key: string) -> object
 
     out
 
-said(r) = print("  ", r.method, r.path, r.status, string(r.ms) + "ms")
+// **The guard hands a sink a record and the `logger` package takes one**, so there is nothing
+// between them. The default sink writes a line of text on stdout.
+said(r) = info("request", r)
 
 async sent(url: string, method: string, value)
     val options = if value == null then { method: method } else { method: method, body: toJSON(value) }

@@ -11,4 +11,7 @@
     // declaration is what carries the annotation, and an annotation is the only check a consumer's
     // call gets.
     main: "sluice.sl",
+    dependencies: {
+        logger: { git: "github.com/slate-language/logger", version: "0.1.0" },
+    },
 }
