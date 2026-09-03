@@ -17,6 +17,12 @@
 //
 // What is kept is its behaviour, deliberately: `:name` and `*rest`, routes tried in the order they
 // were added, and a path that is there under another method answered `405` with an `Allow`.
+//
+// **Percent-decoding is `slate:http`'s**, and this file kept a copy of it only while the server did
+// not export one. `percentDecode(s, plusIsSpace)` is the same walk over bytes, `+` left alone in a
+// path, and a `%` not followed by two hexadecimal digits kept as a `%` -- which is what a browser
+// does with one, and refusing would let any peer stop a program over a character somebody typed.
+import { percentDecode } from slate:http
 
 // The parts of a path, with the leading and trailing slashes gone. `/` is no parts at all, which is
 // what makes it match a route written `/` and nothing else.
@@ -56,46 +62,10 @@ export fit(parts: array of string, want: array of string) -> object | null
         if i >= len(want) then return null
 
         if startsWith(p, ":")
-            out[p[1..<len(p)]] = decodePercent(want[i])
+            out[p[1..<len(p)]] = percentDecode(want[i], false)
         elif p != want[i]
             return null
 
         i = i + 1
 
     if len(want) != len(parts) then null else out
-
-// Percent-decoding, **over bytes**: `%C3%A9` is two bytes that are one character, so decoding
-// character by character would answer two characters that are not text.
-//
-// **Bytes that are not text answer the input unchanged**, which is `slate:http`'s rule and is not
-// timidity: a path is something a peer wrote, and a fault there would let any peer stop a program.
-export decodePercent(s: string) -> string
-    if !contains(s, "%") then return s
-
-    val bs = toBytes(s)
-    var out = []
-    var i = 0
-
-    while i < len(bs)
-        val b = bs[i]
-        val hi = if b == 37 && i + 2 < len(bs) then hexDigit(bs[i + 1]) else null
-        val lo = if hi == null then null else hexDigit(bs[i + 2])
-
-        if lo == null
-            push(out, b)
-            i = i + 1
-        else
-            push(out, hi * 16 + lo)
-            i = i + 3
-
-    val text = fromBytes(out)
-
-    if text.ok then text.value else s
-
-// One hexadecimal digit as a number, `null` where the byte is not one.
-hexDigit(b: integer) -> integer | null
-    if b >= 48 && b <= 57 then return b - 48
-    if b >= 65 && b <= 70 then return b - 55
-    if b >= 97 && b <= 102 then return b - 87
-
-    null

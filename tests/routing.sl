@@ -22,6 +22,12 @@ async A_COLON_PARAMETER_BINDS_ONE_SEGMENT_AND_IS_PERCENT_DECODED()
     assertEq(await app.handle(request("GET", "/notes/7")), "7")
     assertEq(await app.handle(request("GET", "/notes/caf%C3%A9")), "café")
 
+    // The decoding is `slate:http`'s `percentDecode`, and the two edges worth pinning here are the
+    // ones a peer can write: a `%` that no two hexadecimal digits follow is a `%`, and a `+` in a
+    // path is a `+` rather than a space.
+    assertEq(await app.handle(request("GET", "/notes/100%")), "100%")
+    assertEq(await app.handle(request("GET", "/notes/a+b")), "a+b")
+
 @test
 async A_STAR_PARAMETER_TAKES_THE_WHOLE_OF_THE_REST_SLASHES_INCLUDED()
     val app = api()

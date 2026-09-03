@@ -11,7 +11,10 @@
     // declaration is what carries the annotation, and an annotation is the only check a consumer's
     // call gets.
     main: "sluice.sl",
-    dependencies: {
+    // `logger` is a DEV dependency: the guard hands a sink a record and the package takes one, and
+    // `tests/logging.sl` and `examples/notes.sl` are the only things that use it. A consumer of
+    // `sluice` gets neither, so nothing it installs has to carry a logger it did not ask for.
+    devDependencies: {
         logger: { git: "github.com/slate-language/logger", version: "0.1.0" },
     },
 }

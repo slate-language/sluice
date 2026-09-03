@@ -155,13 +155,15 @@ slate examples/notes.sl
 `check/` holds the two hand-run drivers — the exhaustiveness refusal above, and a defect stopping the
 program — and they are not under `tests/` because passing would mean ending the run.
 
-**It needs slate 0.0.22 or later.** Shape values with `test`/`mismatch`/`name` are what make a
-declaration the validator, and `?` optional keys are what let a request body have one; both arrived
-in 0.0.7.
+**It needs slate 0.0.23 or later.** Shape values with `test`/`mismatch`/`name` are what make a
+declaration the validator and `?` optional keys are what let a request body have one, both from
+0.0.7; 0.0.23 is the floor because path parameters are decoded with `slate:http`'s own
+`percentDecode` and because `logger` is a dev dependency, which is a manifest section that release
+introduced.
 
-**It depends on [logger](https://github.com/slate-language/logger) 0.1.0**, which the example and one
-test use. slate has no notion of a dependency that is only for a suite, so it arrives with the
-package — it is one file of pure slate with no host in it.
+**[logger](https://github.com/slate-language/logger) 0.1.0 is a DEV dependency**, used by the example
+and one test. Installing `sluice` does not install it: a package's own `devDependencies` are resolved
+only when that package is the project being built.
 
 **`slate test --js` does not run this suite yet**: `monotonic`, which `logger` times a request with,
 is one of the builtins the JavaScript back end still owes.
