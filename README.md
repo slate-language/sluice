@@ -1,0 +1,145 @@
+# sluice — an API server for slate
+
+**A request is a value, a handler is a function of it, and everything else is composition.** No
+`next`, no mutable response, no ambient context, no `app.use()`.
+
+```
+slate add github.com/slate-language/sluice
+```
+
+```slate
+import { api, stack, body, bearer, logger, problem, json } from sluice
+import { serve } from slate:http
+
+type NewNote = { title: string, text: string, pinned?: boolean }
+
+data Failure
+    NoSuchNote(id)
+    Taken(title)
+
+type Fail = Failure
+
+val app = api()
+
+app.failures(Fail, (f: Failure) -> f match
+    NoSuchNote(id) -> problem(404, "Not Found", "there is no note " + id)
+    Taken(title) -> problem(409, "Conflict", "that title is taken", { taken: title }))
+
+app.get("/notes/:id", (req) -> find(req.params.id))
+app.post("/notes", stack([logger(print), bearer(check), body(NewNote)])(create))
+
+serve(8080, app)
+```
+
+**`api()` is an object with a `handle`, so `serve(port, app)` works unchanged.** `slate:http` asks a
+server object for its `handle` and calls that; nothing in the server had to learn what this package
+is, and everything it already does — keep-alive, compression, TLS, `serveStream` — is untouched.
+
+## The five decisions
+
+1. **A guard wraps a handler**, and `stack([a, b])(h)` is `a(b(h))`, composed once when the route is
+   added rather than walked per request. A stack keeps the list it was built from, so
+   `api.routes()` can print what each route actually runs — the one thing an interceptor chain buys
+   over plain composition, and it costs a field.
+2. **A guard adds to the request with `with`, never by mutation.** `bearer` hands on
+   `req with { user }`; `body(Shape, h)` replaces `req.body` with the parsed value and keeps the
+   text on `req.raw`. The request you handed to `handle` is still the value it was.
+3. **A failure is a value a handler RETURNS.** `api.failures(Shape, fn)` registers the shape and the
+   mapping, and because `fn` is annotated `(f: Failure) -> …`, slate's exhaustiveness rule proves
+   before the program runs that every failure the application can produce has an HTTP answer.
+   Nothing in express or axum can check that.
+4. **RFC 9457 problem details by default** — `application/problem+json` with `type`, `title`,
+   `status`, `detail` and `instance`. 404, 405, 400, 401 and 500 all go out as problem documents.
+5. **`await api.handle(request)` answers a response with no socket in it.** The whole suite of this
+   package is written that way: no port, no client, no watchdog, and nothing that can flake under
+   load.
+
+## Testing a handler without a port
+
+```slate
+import { api, request, response } from sluice
+
+@test
+async A_MISSING_NOTE_IS_A_404()
+    val app = api()
+
+    app.get("/notes/:id", (req) -> { status: 404 })
+
+    assertEq(response(await app.handle(request("GET", "/notes/9"))).status, 404)
+```
+
+`request(method, path, options)` builds what a server would have delivered — `headers` lowercased,
+`query` rendered into `search`, a non-string `body` encoded as JSON — and the value it answers `is`
+`slate:http`'s own `Request`.
+
+## The guards
+
+| | |
+|---|---|
+| `body(Shape, handler)` | parses JSON, checks it against `Shape`, hands it on under `body` with the text on `raw`; a `400` problem carrying every mismatch otherwise |
+| `query(Shape, handler)` | the same check over `req.query`, which is already an object of strings |
+| `bearer(verify, handler)` | the token out of `Authorization`, `req with { user }`; a `401` problem with `WWW-Authenticate` otherwise |
+| `cors(options, handler)` | the headers a browser needs, and a preflight answered without the handler running |
+| `logger(sink, handler)` | `sink({ method, path, status, ms })` once the answer is known |
+
+**Each takes the handler last, and each may be given none** — in which case it answers the guard
+itself, which is what goes in a `stack`. The two spellings differ in how they read and in nothing
+else:
+
+```slate
+app.post("/notes", logger(print, bearer(check, body(NewNote, create))))
+app.post("/notes", stack([logger(print), bearer(check), body(NewNote)])(create))
+```
+
+`guardOf(label, wrap)` makes one of your own, with the name `api.routes()` will print for it.
+
+**`bearer`'s `verify` is the application's and answers a result** — `{ ok: true, value: user }` or
+`{ ok: false, error: text }`, which is the channel `slate:jwt`'s own `verify` uses. It may answer a
+promise, so a verifier that asks a database is an ordinary one. This package holds no opinion about
+what a token is.
+
+## `type Fail = Failure`, and why the alias is there
+
+**A `data` name binds the data type, which is not a shape value**, so `Failure.test` does not exist.
+`api.failures` needs something with a `test` on it — that is how `handle` tells a returned failure
+from a response — and `type Fail = Failure` is the spelling that provides one. The annotation on the
+mapping stays `(f: Failure)`, which is what the exhaustiveness check reads.
+
+## What a failure costs, and what it buys
+
+`check/exhaustive.sl` is a program that leaves one variant unanswered. **It does not compile**, and
+that refusal is the whole argument for returning failures rather than throwing them:
+
+```
+error: this match does not cover every Failure -- `Taken` is unmatched. Add an arm for it, or `_` for whatever is left
+```
+
+**The mapping runs under the guards, not over them**, which matters more than it looks: a `logger`
+above an unmapped failure would report `200` for what a client received as `409`, and a `cors` above
+one would wrap the failure in an envelope and send it out as a `200`.
+
+## A defect is still a defect
+
+**A handler that faults answers a `500` problem, and the fault is put back on the loop afterwards** —
+which is what `slate:http` does for its own handlers. The client is told, and the program stops
+rather than swallowing a defect into a log nobody reads. `api({ onFault: fn })` is how a program
+that has somewhere to send a defect says so, and how a test watches it happen without ending the
+run. What the client is told and what the program is told are different things on purpose: the 500's
+`detail` never quotes the fault.
+
+## Running the suite and the examples
+
+```
+slate test tests
+slate examples/notes.sl
+```
+
+`check/` holds the two hand-run drivers — the exhaustiveness refusal above, and a defect stopping the
+program — and they are not under `tests/` because passing would mean ending the run.
+
+**It needs slate 0.0.22 or later.** Shape values with `test`/`mismatch`/`name` are what make a
+declaration the validator; `?` optional keys are what let a request body have one; both arrived in
+0.0.7.
+
+**`slate test --js` does not run this suite yet**: `monotonic`, which `logger` times a request with,
+is one of the builtins the JavaScript back end still owes.
