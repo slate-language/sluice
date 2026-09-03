@@ -156,11 +156,11 @@ slate examples/notes.sl
 `check/` holds the two hand-run drivers — the exhaustiveness refusal above, and a defect stopping the
 program — and they are not under `tests/` because passing would mean ending the run.
 
-**It needs slate 0.0.23 or later.** Shape values with `test`/`mismatch`/`name` are what make a
+**It needs slate 0.0.24 or later.** Shape values with `test`/`mismatch`/`name` are what make a
 declaration the validator and `?` optional keys are what let a request body have one, both from
-0.0.7; 0.0.23 is the floor because path parameters are decoded with `slate:http`'s own
-`percentDecode` and because `logger` is a dev dependency, which is a manifest section that release
-introduced.
+0.0.7; 0.0.23 gave `slate:http` the `percentDecode` a path parameter is read with and the manifest
+the `devDependencies` section below; 0.0.24 made a `data` name one of those shape values, which is
+what `api.failures(Failure, …)` on this page is.
 
 **[logger](https://github.com/slate-language/logger) 0.1.0 is a DEV dependency**, used by the example
 and one test. Installing `sluice` does not install it: a package's own `devDependencies` are resolved
