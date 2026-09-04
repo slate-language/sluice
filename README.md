@@ -150,6 +150,7 @@ run. What the client is told and what the program is told are different things o
 
 ```
 slate test tests
+slate test --js tests
 slate examples/notes.sl
 ```
 
@@ -166,5 +167,6 @@ what `api.failures(Failure, …)` on this page is.
 and one test. Installing `sluice` does not install it: a package's own `devDependencies` are resolved
 only when that package is the project being built.
 
-**`slate test --js` does not run this suite yet**: `monotonic`, which `logger` times a request with,
-is one of the builtins the JavaScript back end still owes.
+**The suite runs under node as well**, which is what `slate test --js tests` above is: `monotonic`,
+which a request is timed with, is on the JavaScript back end from **slate 0.0.25**. That is this
+package's floor on a JavaScript host; 0.0.24 still runs it under the interpreter.
