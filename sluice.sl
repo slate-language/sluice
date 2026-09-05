@@ -27,10 +27,13 @@
 // here, slate's `export` being a prefix on a declaration with no re-export form. That is what keeps
 // the annotations: an annotation is the only check a consumer's call gets.
 
+import { sse as eventStream } from slate:http
+
 import { makeApi, stack as makeStack, lazy } from "./api.sl"
 import { problemResponse, jsonResponse, asResponse } from "./response.sl"
 import { bodyGuard, queryGuard, bearerGuard, corsGuard, loggerGuard, guard, labelOf } from "./guards.sl"
 import { sessionGuard, csrfGuard } from "./sessions.sl"
+import { makeHub } from "./events.sl"
 import { request as makeRequest } from "./testing.sl"
 
 // -- the api -----------------------------------------------------------------------------------------
@@ -98,6 +101,20 @@ export session(secret: string, options: object = {}, handler = null) =
 //
 // `options` takes `name` (`"csrf"`) and `header` (`"x-csrf-token"`).
 export csrf(options: object = {}, handler = null) = applied(csrfGuard(options), handler)
+
+// `hub()` -- an event hub: `publish(topic, value)`, `subscribe(topic, options)` and `count(topic)`.
+//
+// `subscribe` answers a SOURCE, which is what `sse` takes, so a route is one line:
+//
+//     app.get("/events", (req) -> sse(feed.subscribe("notes")))
+//
+// **`close()` on that source has to be called when the stream ends**, `slate:http`'s writer not
+// telling a source that nobody is pulling from it any more.
+export hub() -> object = makeHub()
+
+// `sse(source, options)` -- an event stream, re-exported from `slate:http` so that answering with
+// one does not mean importing a second module beside this.
+export sse(source, options: object = {}) -> object = eventStream(source, options)
 
 // `guard(label, wrap)` -- a guard of your own, with the name `api.routes()` will print for it.
 //

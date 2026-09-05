@@ -82,6 +82,8 @@ async A_MISSING_NOTE_IS_A_404()
 | `session(secret, options, handler)` | a signed cookie carrying the session itself, on `req.session` |
 | `csrf(options, handler)` | the double-submit token, and a `403` problem without it |
 
+`hub()` and `sse(source, options)` are not guards but belong beside them — see **Events** below.
+
 **`logger`'s sink is a function of a record, which is exactly what
 [logger](https://github.com/slate-language/logger) takes**, so the two fit with nothing between
 them — no adapter, no line of text built in the wrong place:
@@ -175,6 +177,49 @@ problem. The comparison is `slate:crypto`'s `timingSafeEqual`. `options` takes `
 
 **This is the one cookie deliberately not `HttpOnly`**, and the whole double-submit argument rests on
 it: a page has to be able to read the token to send it back.
+
+## Events
+
+**A hub, and the server-sent stream a subscriber reads it through.**
+
+```slate
+import { api, hub, sse } from sluice
+
+val app = api()
+val feed = hub()
+
+app.get("/events", (req) -> sse(feed.subscribe("notes")))
+app.post("/notes", (req) -> made(feed, req))
+
+made(feed, req)
+    feed.publish("notes", { event: "made", data: { id: 7 } })
+
+    json({ ok: true }, 201)
+```
+
+**`subscribe` answers a source** — `{ next }` answering `{ done, value }` — which is exactly what
+`sse` takes, so sluice adds no shape of its own and a test pulls events out of a handler's answer
+with no port anywhere.
+
+**It is SSE and not a WebSocket, and that is the design rather than a stage.** A hub is one-way. A
+server-sent stream is a plain `GET`, so every guard here already applies to it — including `session`
+and `csrf` — and a browser reconnects on its own. A program that genuinely needs two-way traffic
+wants `slate:ws` directly.
+
+**A subscriber that falls behind loses the oldest events, and the drops are counted.** The bound is
+`options.bound`, 256 by default. A live feed stays live: a client that cannot keep up wants the
+newest state and not a backlog, and the alternative to dropping is a queue one slow client can grow
+until the server runs out of memory. `source.dropped()` says how many went, so a client falling
+behind is a number rather than a silence.
+
+**`source.close()` has to be called when a stream ends, and nothing calls it for you.** `slate:http`'s
+writer stops pulling from a source when a connection ends and does not tell the source, so a
+subscriber nobody closes stays on the topic for the life of the program. `feed.count(topic)` is how
+you see that, and how the suite proves it.
+
+**There is no `Last-Event-ID` replay.** A browser reconnects and misses what happened while it was
+away, which is what most feeds want; doing it properly means the hub keeps a ring buffer per topic
+and ids get assigned, which is a second design.
 
 ## The failure type is passed by its own name
 

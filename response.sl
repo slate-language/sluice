@@ -52,14 +52,29 @@ export isEnvelope(v) -> boolean =
 
 // An answer as `{ status, headers, body }`, so that a guard wrapping a handler has one shape to add
 // a header to. **A string, a byte array and a number are bodies**, exactly as they are to `serve`.
+//
+// **EVERY OTHER MEMBER THE ANSWER CARRIED IS KEPT, AND THAT IS NOT TIDINESS.** This rebuilt an
+// envelope from three names, so anything else on it was dropped the moment a guard touched the
+// response -- and `slate:http`'s `sse` puts `heartbeat` on one. An event stream behind `cors`,
+// `logger` or `session` lost its keep-alive and died quietly on the first proxy with an idle
+// timeout, and nothing here would have noticed, this suite never reaching a socket.
+//
+// **So the rule is CARRY WHAT WAS THERE rather than enumerate what is known**, which is also what
+// makes the next member `slate:http` grows arrive here for free instead of being lost until somebody
+// reports it.
 export asResponse(v) -> object
     if !isEnvelope(v) then return { status: 200, headers: {}, body: v }
 
-    val status = if has(v, "status") then v.status else 200
-    val headers = if has(v, "headers") then v.headers else {}
+    var out = {}
 
-    if has(v, "body") then { status: status, headers: headers, body: v.body }
-    else { status: status, headers: headers, body: "" }
+    for [k, hv] in entries(v)
+        if k != "status" && k != "headers" && k != "body" then out[k] = hv
+
+    out["status"] = if has(v, "status") then v.status else 200
+    out["headers"] = if has(v, "headers") then v.headers else {}
+    out["body"] = if has(v, "body") then v.body else ""
+
+    out
 
 // A response with more headers on it. **The answer is a new object**: a guard that wrote into the
 // response a handler built would be mutating a value the handler may still hold.
