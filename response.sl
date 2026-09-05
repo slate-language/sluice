@@ -63,6 +63,18 @@ export asResponse(v) -> object
 
 // A response with more headers on it. **The answer is a new object**: a guard that wrote into the
 // response a handler built would be mutating a value the handler may still hold.
+//
+// **A HEADER THAT MAY REPEAT IS APPENDED AND NOT REPLACED, AND `Set-Cookie` IS WHY.** This merged by
+// name, so a response already carrying a session cookie lost it the moment anything added a second
+// one -- silently, and the first thing anybody writes is a login that sets a session and a CSRF
+// token together. `slate:http` takes an ARRAY for a name that repeats, which is the shape 0.0.27
+// gave it for exactly this, and both back ends write one line per element.
+//
+// **`Set-Cookie` is the only name this is true of, and that is the specification's own note.** RFC
+// 9110 excludes it from the rule that repeated fields may be joined with commas, because a cookie
+// carries commas inside itself -- `Expires=Wed, 21 Oct 2026` -- so two joined with `", "` cannot be
+// taken apart again by anything. Every other repeated header keeps the last, which is what a guard
+// adding a `Content-Type` or a `Vary` means.
 export withHeaders(v, extra: object) -> object
     val r = asResponse(v)
     var headers = {}
@@ -71,6 +83,34 @@ export withHeaders(v, extra: object) -> object
         headers[k] = hv
 
     for [k, hv] in entries(extra)
-        headers[k] = hv
+        if repeats(k) && has(headers, k)
+            headers[k] = joined(headers[k], hv)
+        else
+            headers[k] = hv
 
     r with { headers: headers }
+
+// Whether two of this header are two lines rather than the second replacing the first.
+//
+// **Compared without case**, a header name being case-insensitive and a handler writing whichever
+// spelling it likes.
+repeats(name: string) -> boolean = name.lower() == "set-cookie"
+
+// Both values as one, whatever shapes they arrived in. A header's value is a string or an array of
+// them, so this is four cases and no cleverness.
+joined(had, added) -> array
+    var out = []
+
+    if had is array
+        for one in had
+            push(out, one)
+    else
+        push(out, had)
+
+    if added is array
+        for one in added
+            push(out, one)
+    else
+        push(out, added)
+
+    out

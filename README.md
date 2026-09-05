@@ -79,6 +79,8 @@ async A_MISSING_NOTE_IS_A_404()
 | `bearer(verify, handler)` | the token out of `Authorization`, `req with { user }`; a `401` problem with `WWW-Authenticate` otherwise |
 | `cors(options, handler)` | the headers a browser needs, and a preflight answered without the handler running |
 | `logger(sink, handler)` | `sink({ method, path, status, ms })` once the answer is known |
+| `session(secret, options, handler)` | a signed cookie carrying the session itself, on `req.session` |
+| `csrf(options, handler)` | the double-submit token, and a `403` problem without it |
 
 **`logger`'s sink is a function of a record, which is exactly what
 [logger](https://github.com/slate-language/logger) takes**, so the two fit with nothing between
@@ -113,6 +115,66 @@ app.post("/notes", stack([logger(print), bearer(check), body(NewNote)])(create))
 `{ ok: false, error: text }`, which is the channel `slate:jwt`'s own `verify` uses. It may answer a
 promise, so a verifier that asks a database is an ordinary one. This package holds no opinion about
 what a token is.
+
+## Sessions
+
+**A session is the data, signed, and not an identifier into a store.** The value travels in the
+cookie, an HMAC over it says nobody changed it, and the server holds nothing at all.
+
+```slate
+import { api, session, csrf, json } from sluice
+
+val app = api()
+
+app.post("/login", session(Secret, {}, (req) -> logIn(req)))
+app.get("/me", session(Secret, {}, (req) -> json({ who: req.session.value })))
+
+logIn(req)
+    req.session.set({ user: "ada" })
+
+    json({ ok: true })
+```
+
+**`req.session` is `{ value, set }`.** `value` is what the cookie said, or `null` where there was no
+cookie, where it had been tampered with, or where it had expired — which are one thing to a handler:
+there is nobody logged in. Telling them apart would hand a client the difference between "no cookie"
+and "a bad signature", which is a thing to know only if you are forging one.
+
+**The cookie is written only where `set` was called**, so an ordinary request that reads a session
+and answers carries no `Set-Cookie` at all. `set(null)` clears it.
+
+**What it costs is written down rather than discovered.** A cookie is about 4 KB, so a session is a
+handful of fields and not a shopping basket — and **there is no revocation**: a signed cookie is good
+until it expires, so `maxAge` is the only way to end one early and a password change does not log
+anybody out. Where either matters the answer is a store, and `session(secret, { store })` is the
+shape that would take without changing anything written against this.
+
+**The defaults are the safe ones and every one is overridable** — `httpOnly`, `sameSite: "Lax"`,
+`path: "/"`, and `secure` where the request arrived over https, which follows `x-forwarded-proto`
+rather than being on always, or a session would not work over `http://localhost`. `options` also
+takes `name` (`"session"`), `maxAge` in seconds, and anything else `slate:http`'s `setCookie` takes.
+
+## CSRF
+
+**A random token in a cookie a script can read, required back in a header on every unsafe method.**
+A form posted from another site carries the cookie — browsers send those — and cannot read it to put
+in a header, because reading it needs script running on this origin.
+
+```slate
+app.post("/notes", csrf({}, session(Secret, {}, create)))
+```
+
+**`SameSite=Lax` on the session cookie is the first line and the token is depth.** A browser that
+honours it does not send the session with a cross-site `POST` at all; the token covers the browsers
+and the cases that do not.
+
+`POST`, `PUT`, `PATCH` and `DELETE` need the header; `GET`, `HEAD` and the rest do not, and a client
+with no token is issued one on its first safe request. A missing or mismatched token is a `403`
+problem. The comparison is `slate:crypto`'s `timingSafeEqual`. `options` takes `name` (`"csrf"`) and
+`header` (`"x-csrf-token"`).
+
+**This is the one cookie deliberately not `HttpOnly`**, and the whole double-submit argument rests on
+it: a page has to be able to read the token to send it back.
 
 ## The failure type is passed by its own name
 
