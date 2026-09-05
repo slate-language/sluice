@@ -194,6 +194,32 @@ async A_TITLE_THE_STORE_REFUSES_WITH_23505_IS_A_409_AND_NOT_A_503()
     assertEq(doc(again).taken, "write the example")
 
 @test
+async AN_EMPTY_TITLE_FITS_THE_SHAPE_AND_IS_REFUSED_ANYWAY()
+    // **A shape says the KIND and the handler says the rest.** `{ title: string }` cannot express
+    // *not empty*, so `""` gets past `body(NewTask)` and is stopped where the rule really lives.
+    val app = made(memory(), [])
+    val cookie = await cookieFor(app)
+
+    assertEq(status(await app.handle(carrying(cookie, "POST", "/tasks", { title: "   " }))), 400)
+    assertEq(status(await app.handle(carrying(cookie, "POST", "/tasks", { title: 7 }))), 400)
+
+@test
+async THE_LOG_REPORTS_THE_STATUS_THE_CLIENT_WAS_GIVEN_AND_NOT_A_200()
+    // **The failure mapping runs UNDER the guards**, which is what makes this true and is the one
+    // ordering in this package that is not obvious: a `logger` above an unmapped failure reports
+    // `200` for what the client received as `409`.
+    val log = []
+    val app = made(memory(), log)
+    val cookie = await cookieFor(app)
+
+    await app.handle(carrying(cookie, "POST", "/tasks", { title: "write the example" }))
+
+    val again = await app.handle(carrying(cookie, "POST", "/tasks", { title: "write the example" }))
+
+    assertEq(status(again), 409)
+    assertEq(log[len(log) - 1].status, 409)
+
+@test
 async FINISHING_A_TASK_ANSWERS_IT_DONE()
     val app = made(memory(), [])
     val cookie = await cookieFor(app)

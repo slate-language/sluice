@@ -67,6 +67,10 @@ async main()
     // The same title again, which the unique index refuses and the application answers as a 409.
     print(shown(await sent(site, "POST", "/tasks", { title: "write the example" }, who)))
 
+    // A body that does not fit the declaration, and one that fits it and is still not a task.
+    print(shown(await sent(site, "POST", "/tasks", { name: "the wrong member" }, who)))
+    print(shown(await sent(site, "POST", "/tasks", { title: "  " }, who)))
+
     val first = "/tasks/" + string(idIn(one))
     val second = "/tasks/" + string(idIn(two))
 

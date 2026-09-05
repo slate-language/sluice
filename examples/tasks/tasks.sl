@@ -129,6 +129,11 @@ async listed(store: object)
     json(r.value)
 
 async made(store: object, req: object)
+    // **A shape says what KIND a member is and not what it may hold**, so the one check a task list
+    // wants that `NewTask` cannot make is written here: an empty title fits `string` perfectly well
+    // and is not a task.
+    if trim(req.body.title) == "" then return problem(400, "Bad Request", "a task wants a title")
+
     val r = await store.add(req.body.title)
 
     if r.ok then return json(r.value, 201)
