@@ -82,7 +82,8 @@ async A_MISSING_NOTE_IS_A_404()
 | `session(secret, options, handler)` | a signed cookie carrying the session itself, on `req.session` |
 | `csrf(options, handler)` | the double-submit token, and a `403` problem without it |
 
-`hub()` and `sse(source, options)` are not guards but belong beside them — see **Events** below.
+`hub(options)`, `sse(source, options)` and `lastEventId(req)` are not guards but belong beside them —
+see **Events** below.
 
 **`logger`'s sink is a function of a record, which is exactly what
 [logger](https://github.com/slate-language/logger) takes**, so the two fit with nothing between
@@ -217,9 +218,44 @@ writer stops pulling from a source when a connection ends and does not tell the 
 subscriber nobody closes stays on the topic for the life of the program. `feed.count(topic)` is how
 you see that, and how the suite proves it.
 
-**There is no `Last-Event-ID` replay.** A browser reconnects and misses what happened while it was
-away, which is what most feeds want; doing it properly means the hub keeps a ring buffer per topic
-and ids get assigned, which is a second design.
+### Replay, for a client that reconnects
+
+**A hub asked for it keeps the last N events of every topic**, and a client that reconnects saying
+where it left off is handed what it missed before anything live:
+
+```slate
+import { api, hub, sse, lastEventId } from sluice
+
+val feed = hub({ replay: 64 })
+
+app.get("/events", (req) -> sse(feed.subscribe("notes", { lastEventId: lastEventId(req) })))
+```
+
+**`replay` is `0` by default and `0` means off**, which is what most feeds want — a browser
+reconnects, asks for the current state and carries on. A hub that remembers nothing also sends no
+ids, because an id is a promise to be able to replay from it.
+
+**With `replay` on, every event carries one.** An object published to a topic is given an `id`
+member and anything else is wrapped as its `data`, which is `slate:http`'s own shape for a piece of
+an event stream — so `publish("notes", "hello")` goes out as `id: 1` and `data: hello`, and
+`publish("notes", { event: "made", data: { id: 7 } })` keeps its event name and gains the id. **The
+ids are the topic's**, counted from 1: a client reconnects to the stream it was reading, and an id
+from another topic would place it somewhere arbitrary in this one.
+
+**`lastEventId(req)` reads the request and `subscribe` takes the id**, which is what keeps the hub
+one-way: a hub knows about topics and not about requests, and `sse` takes a source and not a
+request. It reads the `Last-Event-ID` header a browser sends on its own, and the `lastEventId` query
+parameter for a client that cannot put a header on an `EventSource`.
+
+**An id older than the buffer is handed everything still held, and the client is told nothing.**
+That is what a browser expects: `EventSource` has no way of being told it missed something and no
+way of asking again, so a hole arrives as a gap in the ids — a client that must not have one checks
+them, and one that only wants the current state carries on. **An id this hub did not write replays
+nothing and goes live**, a position that cannot be read being no position at all.
+
+**The replay goes through the same bounded queue the live events go through**, so a backlog longer
+than `bound` drops its oldest and `source.dropped()` counts them, exactly as a burst would. One rule
+about falling behind rather than two.
 
 ## The failure type is passed by its own name
 

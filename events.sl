@@ -18,20 +18,38 @@
 // backlog, so the queue is bounded and the oldest go.
 val Backlog = 256
 
-// `hub()` -- publish to a topic, subscribe to one, and count who is listening.
-export makeHub() -> object
-    // Topic name to the subscribers on it. **An object used as a table**, the topics being whatever
-    // the program calls them.
+// `hub(options)` -- publish to a topic, subscribe to one, and count who is listening.
+//
+// **`replay` IS THE ONE OPTION AND IT IS OFF BY DEFAULT.** `hub({ replay: 64 })` keeps the last 64
+// events of every topic so that a client reconnecting with a `Last-Event-ID` is handed what it
+// missed; `hub()` keeps nothing, which is what most feeds want -- a browser reconnects, asks for the
+// current state and carries on.
+export makeHub(options: object = {}) -> object
+    val keep = options.replay ?? 0
+
+    // Topic name to `{ listeners, ring, next }`. **An object used as a table**, the topics being
+    // whatever the program calls them.
     val topics = {}
 
+    // What the hub holds about one topic, made on first use.
+    //
+    // **`next` starts at 1 rather than 0** so that every id a client can be holding is a positive
+    // number, and "before the first event" has a value to be.
+    topicOf(topic: string) -> object
+        if !has(topics, topic) then topics[topic] = { listeners: [], ring: [], next: 1 }
+
+        topics[topic]
+
     // Everybody on a topic, or an empty list for one nobody has asked about.
-    listeners(topic: string) -> array = topics[topic] ?? []
+    listeners(topic: string) -> array = if has(topics, topic) then topics[topic].listeners else []
 
     // `publish(topic, value)` -- hand a value to everybody listening.
     //
     // **A waiting subscriber is settled and an unwatched one is queued**, which is the whole of the
     // arrangement: `next` either has something to answer or parks on a promise this settles.
     publish(topic: string, value)
+        val event = if keep > 0 then remembered(topic, value) else value
+
         for one in listeners(topic)
             if one.closed then continue
 
@@ -40,19 +58,56 @@ export makeHub() -> object
 
                 one.waiting = null
 
-                settle(waiting, { done: false, value: value })
+                settle(waiting, { done: false, value: event })
             else
-                push(one.queue, value)
-
-                // **The oldest goes and the drop is counted**, so that a client falling behind is a
-                // number somebody can read rather than a silence.
-                if len(one.queue) > one.bound
-                    one.queue = one.queue[1..]
-                    one.dropped = one.dropped + 1
+                enqueue(one, event)
 
         null
 
-    // `subscribe(topic, options)` -- a source of everything published to `topic` from now on.
+    // The event as it will go out, with the id this topic gives it, kept in the topic's ring.
+    //
+    // **THE IDS ARE THE TOPIC'S AND NOT THE HUB'S**, because that is what `Last-Event-ID` means: a
+    // client reconnects to the stream it was reading, and an id from another topic would place it
+    // somewhere arbitrary in this one.
+    remembered(topic: string, value)
+        val held = topicOf(topic)
+        val event = identified(value, held.next)
+
+        held.next = held.next + 1
+
+        push(held.ring, event)
+
+        if len(held.ring) > keep then held.ring = held.ring[1..]
+
+        event
+
+    // Everything the topic still holds that was published after the id a client says it last saw.
+    //
+    // **AN ID OLDER THAN THE BUFFER ANSWERS EVERYTHING HELD AND THE CLIENT IS TOLD NOTHING**, which
+    // falls out of the comparison rather than being a case: every event still in the ring is newer
+    // than an id that fell out of it. That is what a browser expects -- `EventSource` has no way of
+    // being told it missed something and no way of asking again -- so a client that must not have a
+    // hole checks its own ids, and one that only wants the current state carries on.
+    heldAfter(topic: string, lastSeen) -> array
+        if keep <= 0 || lastSeen == null then return []
+        if !has(topics, topic) then return []
+
+        val after = numbered(lastSeen)
+
+        // **An id this hub did not write replays nothing and goes live**, a position that cannot be
+        // read being no position at all. Answering the whole ring instead would hand a client that
+        // reconnected to the wrong server a burst of events it had already seen.
+        if after == null then return []
+
+        var out = []
+
+        for one in topics[topic].ring
+            if numbered(one.id) > after then push(out, one)
+
+        out
+
+    // `subscribe(topic, options)` -- a source of everything published to `topic` from now on, and of
+    // what it missed where `lastEventId` says where it left off.
     //
     // **`close()` HAS TO BE CALLED and nothing calls it for you**, which is this design's one sharp
     // edge: `slate:http`'s writer stops pulling from a source when a connection ends and does not
@@ -62,9 +117,13 @@ export makeHub() -> object
         val one = { queue: [], waiting: null, dropped: 0, closed: false,
                     bound: options.bound ?? Backlog }
 
-        if !has(topics, topic) then topics[topic] = []
+        // **The replay goes through the queue the live events go through**, so a replay longer than
+        // `bound` drops its oldest and counts them exactly as a burst would. One rule about falling
+        // behind rather than two.
+        for held in heldAfter(topic, options.lastEventId ?? null)
+            enqueue(one, held)
 
-        push(topics[topic], one)
+        push(topicOf(topic).listeners, one)
 
         // The next event, or a promise of one. **A closed subscriber is `done`**, which is what ends
         // the response the source was feeding.
@@ -97,7 +156,9 @@ export makeHub() -> object
 
                 settle(waiting, { done: true, value: null })
 
-            topics[topic] = without(listeners(topic), one)
+            val held = topicOf(topic)
+
+            held.listeners = without(held.listeners, one)
 
             null
 
@@ -113,6 +174,63 @@ export makeHub() -> object
     count(topic: string) -> integer = len(listeners(topic))
 
     { publish: publish, subscribe: subscribe, count: count }
+
+// `lastEventId(req)` -- the id a reconnecting client says it last saw, or `null`.
+//
+// **THE HUB TAKES THE ID RATHER THAN THE REQUEST, WHICH IS WHAT KEEPS IT ONE-WAY.** A hub knows
+// about topics and events and nothing about HTTP; `sse` is `slate:http`'s and takes a source, not a
+// request. Reading the header inside `subscribe` would put a request in the middle of both. So the
+// route reads it, which is one visible line:
+//
+//     app.get("/events", (req) -> sse(feed.subscribe("notes", { lastEventId: lastEventId(req) })))
+//
+// **And it is a plain function rather than a guard for the same reason a guard would be wrong**: a
+// guard writing onto the request would make replay something a stream got only where somebody had
+// remembered to wrap it, and a stream without it would look identical and silently lose events.
+export lastSeenId(req: object) -> string | null
+    val said = req.headers["last-event-id"] ?? null
+
+    if said is string && said != "" then return said
+
+    // **A browser sends the header on its own and cannot be made to send anything else.** A client
+    // that is not a browser often cannot put a header on an `EventSource` at all -- the browser API
+    // takes a URL and nothing else -- so the query parameter is read as well, which is what every
+    // polyfill uses and what a `curl` reconnecting by hand can write.
+    val asked = req.query["lastEventId"] ?? null
+
+    if asked is string && asked != "" then asked else null
+
+// An event with its id on it.
+//
+// **An object is given an `id` MEMBER and anything else is wrapped as its `data`**, which is
+// `slate:http`'s own shape for a piece of an event stream: a piece is a string, which is its data, or
+// an object naming any of `event`, `id`, `retry` and `data`. So the id a hub assigns is the id the
+// client is sent, with nothing between the two, and an `id` the publisher wrote itself is replaced --
+// the ids are the hub's, and one it did not assign could not be replayed against.
+identified(value, id: integer) =
+    val at = string(id)
+
+    if value is object then value with { id: at } else { id: at, data: value }
+
+// An event id as the number it was assigned, or `null` for anything this hub did not write. **Text
+// from a client**, so it answers rather than faulting.
+numbered(raw) -> integer | null
+    if raw is not string then return null
+
+    val n = number(raw)
+
+    if n is not integer then null else n
+
+// Put one event on a subscriber's queue. **The oldest goes and the drop is counted**, so that a
+// client falling behind is a number somebody can read rather than a silence.
+enqueue(one: object, value)
+    push(one.queue, value)
+
+    if len(one.queue) > one.bound
+        one.queue = one.queue[1..]
+        one.dropped = one.dropped + 1
+
+    null
 
 // A list without one member of it, compared by identity.
 without(xs: array, gone) -> array

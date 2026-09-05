@@ -33,7 +33,7 @@ import { makeApi, stack as makeStack, lazy } from "./api.sl"
 import { problemResponse, jsonResponse, asResponse } from "./response.sl"
 import { bodyGuard, queryGuard, bearerGuard, corsGuard, loggerGuard, guard, labelOf } from "./guards.sl"
 import { sessionGuard, csrfGuard } from "./sessions.sl"
-import { makeHub } from "./events.sl"
+import { makeHub, lastSeenId } from "./events.sl"
 import { request as makeRequest } from "./testing.sl"
 
 // -- the api -----------------------------------------------------------------------------------------
@@ -102,7 +102,8 @@ export session(secret: string, options: object = {}, handler = null) =
 // `options` takes `name` (`"csrf"`) and `header` (`"x-csrf-token"`).
 export csrf(options: object = {}, handler = null) = applied(csrfGuard(options), handler)
 
-// `hub()` -- an event hub: `publish(topic, value)`, `subscribe(topic, options)` and `count(topic)`.
+// `hub(options)` -- an event hub: `publish(topic, value)`, `subscribe(topic, options)` and
+// `count(topic)`.
 //
 // `subscribe` answers a SOURCE, which is what `sse` takes, so a route is one line:
 //
@@ -110,7 +111,23 @@ export csrf(options: object = {}, handler = null) = applied(csrfGuard(options), 
 //
 // **`close()` on that source has to be called when the stream ends**, `slate:http`'s writer not
 // telling a source that nobody is pulling from it any more.
-export hub() -> object = makeHub()
+//
+// `options` takes `replay`, which is how many events of every topic the hub keeps for a client that
+// reconnects -- `0`, keeping nothing, by default. `subscribe`'s options are `bound`, how far behind
+// a subscriber may fall before the oldest of its events are dropped (256), and `lastEventId`, the id
+// a returning client last saw.
+export hub(options: object = {}) -> object = makeHub(options)
+
+// `lastEventId(req)` -- the id a reconnecting client says it last saw, or `null`.
+//
+// **The route reads it and hands it to `subscribe`**, which is what keeps the hub one-way: a hub
+// knows about topics and not about requests, and `sse` takes a source and not a request.
+//
+//     app.get("/events", (req) -> sse(feed.subscribe("notes", { lastEventId: lastEventId(req) })))
+//
+// The `Last-Event-ID` header is what a browser sends on its own; the `lastEventId` query parameter
+// is read as well, for a client that cannot put a header on an `EventSource`.
+export lastEventId(req: object) -> string | null = lastSeenId(req)
 
 // `sse(source, options)` -- an event stream, re-exported from `slate:http` so that answering with
 // one does not mean importing a second module beside this.
