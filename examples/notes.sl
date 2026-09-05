@@ -5,7 +5,7 @@
 // **A port of `0` asks the kernel for one, and `localPort` says which it gave.** An example that
 // bound 8080 would fail whenever the machine is already running a server, which is most of the time.
 
-import { api, stack, body, logger, problem, json, request } from "../sluice.sl"
+import { api, stack, body, logger, requestId, timeout, rateLimit, problem, json, request } from "../sluice.sl"
 import { info } from logger
 import { serve, close } from slate:http
 import { localPort } from slate:net
@@ -38,11 +38,20 @@ async main()
 
     // **The guards read in the order a request passes through them**, and they are composed here
     // rather than walked per request.
-    app.post("/notes", stack([logger(said), body(NewNote)])(create))
+    // **The operational guards go outside the ones about this endpoint**, which is what reading in
+    // request order means: a request is named, then bounded, then counted, and only then is its body
+    // anybody's business. The id is put on first so that everything under it can say it.
+    app.post("/notes", stack([requestId({}),
+                              logger(said),
+                              timeout(2000, {}),
+                              rateLimit({ limit: 100, window: 60000 }),
+                              body(NewNote)])(create))
 
     app.delete("/notes/:id", remove)
 
-    app.get("/health", (req) -> "ok")
+    // **A route convention rather than a guard**: the thing asking is a load balancer and not a
+    // client, so it is added on its own and runs under nothing.
+    app.health("/health", ready)
 
     val server = serve(0, app)
     val site = "http://127.0.0.1:" + string(localPort(server))
@@ -61,7 +70,9 @@ async main()
     // suite of a program written with this package looks like.
     print("without a port:", (await app.handle(request("GET", "/health"))))
 
-    close(server)
+    // **How a server stops**: refuse new requests, let what is in hand finish, then let go of the
+    // socket. A program under a deployment does this from `onShutdown`, on `SIGTERM`.
+    print("drained:", await app.drain(server, { grace: 2000 }))
 
 // Every failure this application can produce, and what each one is as HTTP.
 answer(f: Failure) = f match
@@ -96,8 +107,13 @@ without(o: object, key: string) -> object
     out
 
 // **The guard hands a sink a record and the `logger` package takes one**, so there is nothing
-// between them. The default sink writes a line of text on stdout.
+// between them. The default sink writes a line of text on stdout, and `id=` on it is `requestId`'s.
 said(r) = info("request", r)
+
+// **A health check answers the reasons it is unwell**, and an empty answer means it is well. A real
+// one asks whatever this service cannot work without.
+ready() -> array =
+    if nextId > 0 then [] else ["the note store has no identifiers left"]
 
 async sent(url: string, method: string, value)
     val options = if value == null then { method: method } else { method: method, body: toJSON(value) }

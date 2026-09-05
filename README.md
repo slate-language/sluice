@@ -81,6 +81,10 @@ async A_MISSING_NOTE_IS_A_404()
 | `logger(sink, handler)` | `sink({ method, path, status, ms })` once the answer is known |
 | `session(secret, options, handler)` | a signed cookie carrying the session itself, on `req.session` |
 | `csrf(options, handler)` | the double-submit token, and a `403` problem without it |
+| `requestId(options, handler)` | one name for this request, on `req.id` and on the answer |
+| `timeout(ms, options, handler)` | a `503` problem where the handler is taking too long |
+| `rateLimit(options, handler)` | a fixed window per key, and `429` with a `Retry-After` over it |
+| `multipart(options, handler)` | a `multipart/form-data` body as `req.form` |
 
 `hub()` and `sse(source, options)` are not guards but belong beside them — see **Events** below.
 
@@ -117,6 +121,164 @@ app.post("/notes", stack([logger(print), bearer(check), body(NewNote)])(create))
 `{ ok: false, error: text }`, which is the channel `slate:jwt`'s own `verify` uses. It may answer a
 promise, so a verifier that asks a database is an ordinary one. This package holds no opinion about
 what a token is.
+
+## Staying up
+
+**Four guards that are about the server rather than about one request.** `body` and `bearer` decide
+whether a request is acceptable; these are what a service running under a load balancer needs in
+order to be followed in a log, to refuse to wait forever, and not to be the only thing one client is
+doing.
+
+```slate
+import { api, stack, requestId, timeout, rateLimit, logger } from sluice
+
+app.post("/notes", stack([requestId({}),
+                          logger(said),
+                          timeout(2000, {}),
+                          rateLimit({ limit: 100, window: 60000 })])(create))
+```
+
+**They go outside the guards about the endpoint**, which is what reading in request order means: a
+request is named, then bounded, then counted, and only then is its body anybody's business.
+
+### `requestId`
+
+**One name for this request, on `req.id` and echoed on the answer.** An id a client sent under
+`X-Request-Id` is taken rather than replaced — a gateway or a caller has already written it in a log
+of its own, and renaming it breaks the one join a person is trying to make. Where there was none, 16
+random bytes in hex.
+
+**`logger`'s record carries `id` wherever this guard ran**, which is what turns a log into something
+a person can follow one request through:
+
+```
+2026-09-05T12:07:51Z INFO  request method=POST path=/notes status=201 ms=0 id=43078cb214c00eb753…
+```
+
+**What a client sent is checked before it is echoed.** The value goes back out in a response header,
+so an id carrying a carriage return would be a client writing headers of its own; one longer than 200
+characters is a log line of unbounded length on every line the request writes. Either is replaced by
+a generated id rather than refused — this is not an authentication, and a client with a strange id
+still deserves an answer. `options` takes `header` and `generate`.
+
+### `timeout(ms)`
+
+**A `503` problem where the handler has not answered in `ms`.** 503 and not 504: RFC 9110 gives 504 to
+a server *"acting as a gateway or proxy"* that did not hear from an upstream one, and the handler this
+wraps is not upstream of anything — it is this server, *"currently unable to handle the request"*.
+`{ status: 504 }` is for a handler that really is calling something else.
+
+**A late answer is dropped rather than sent, and the work is not stopped.** slate has no way to
+cancel a promise, and what a handler is doing may be a write that is going to happen whatever this
+guard thinks — so the honest statement is that the *answer* is dropped. `options.onLate` is given
+`{ ok: true, value }` for one that arrived late, and `{ ok: false, error }` for a handler that
+faulted late, which would otherwise be the one thing that vanished: the request has been answered, so
+there is no `500` left to make of it and nothing to raise it from.
+
+### `rateLimit`
+
+**A fixed window per key, and `429` with an exact `Retry-After` over it.**
+
+```slate
+app.post("/notes", rateLimit({ limit: 100, window: 60000, key: (req) -> req.user.account }, create))
+```
+
+**A fixed window and not a token bucket, and the reason is the store.** A bucket reads a count and a
+timestamp, works out a refill and writes both back — a read-modify-write two servers sharing one
+store race on. A window is an increment and an expiry: two commands, no read, and the same three lines
+against redis as against the object in this package. **What it costs is a burst at the boundary**, and
+it is written down rather than discovered: a limit of 60 a minute permits 120 across two seconds once.
+Where that matters, use a shorter window.
+
+**`store` is an option and its whole interface is `hit(bucket, ttl)` answering the count.** That is
+the shape a shared store can implement, and `rateStore()` is the one you get when you say nothing.
+
+**The default key is what a proxy said**, `x-forwarded-for`'s first hop then `x-real-ip` — because
+**`slate:http` does not tell a handler who connected**. A server with nothing in front of it therefore
+counts every direct client under one name, which is a global limit rather than a per-client one; and a
+server that *is* exposed directly should pass a `key` of its own, a header anybody can set being a
+rate limit anybody can step around.
+
+**Every answer carries `X-RateLimit-Limit`, `-Remaining` and `-Reset`.** `Reset` is seconds from now
+and not an epoch second — the clock a window is measured against is monotonic and names no point in
+time, and a delta survives a client whose clock is wrong.
+
+## Uploads
+
+**`multipart` parses a `multipart/form-data` body into `req.form`**, which is `{ fields, files }`.
+
+```slate
+app.post("/notes", multipart({ limit: 65536 }, (req) -> save(req.form.files[0])))
+```
+
+`fields` is an object read by name, where a repeated name keeps the last — the rule `slate:http`
+already applies to a repeated name in a query string. `files` is an array, because two files may be
+sent under one name, and each is `{ field, filename, type, content }`. **`type` is what the client
+claimed** and is worth exactly that.
+
+`415` where the body is not multipart, `400` where it will not parse, carrying the reason it did not,
+and `413` over `limit` — counted in **bytes**, a limit being about what the socket carried.
+
+**IT READS TEXT UPLOADS, AND THAT IS A LIMIT OF THE SERVER UNDER IT.** `serve` reads a body whole and
+hands it over as a **string**, and a body that is not UTF-8 becomes the *empty string* on the way — so
+a `.png` posted to a route behind this guard arrives as nothing at all. A program taking arbitrary
+bytes wants `serveStream` and a reader of its own, which is what `slate:http` says about multipart in
+the first place: it parses none, and the parsing is the program's. This is that parsing, for the
+uploads that are text — a form, a CSV, a `.json`, a `.md`.
+
+## Health, and stopping
+
+**`app.health(path, check)` is a route convention rather than a guard**, and it has to be: the thing
+asking is a load balancer and not a client of this API. It has no token, is not to be logged with the
+traffic and is not to be counted against a rate limit, so it is added on its own and runs under
+nothing.
+
+```slate
+app.health()                        // 200 { "status": "ok" } at /health
+app.health("/-/ready", ready)
+
+ready() = if store.reachable() then [] else ["the note store is not answering"]
+```
+
+**A check answers the reasons it is unwell, and an empty answer means it is well.** A boolean would
+make a failing health check a page nobody can act on — the operator is looking at it because
+something is wrong and wants to be told which of the four things it is. The reasons go out in a `503`
+problem document, like every other refusal here. A check may answer a promise, and is asked nothing
+about the request.
+
+```slate
+import { onShutdown } from sluice
+import { serve } from slate:http
+
+val server = serve(8080, app)
+
+onShutdown(() -> app.drain(server, { grace: 10000 }))
+```
+
+**A drain is three things in one order**: stop taking requests, let what is in hand finish, then let
+go of the socket. Doing them in any other order lets a request in. `app.drain` answers
+`{ cut, waited }` — `cut` being how many requests were still running when the grace ran out, because a
+shutdown that regularly cuts requests off is a grace that is too short or a handler that is too slow,
+and neither is visible unless the number is.
+
+**A draining server answers `503` rather than closing the connection**, which is the load balancer's
+cue to send the next request elsewhere — a client that is told retries somewhere useful and one that
+is cut off retries here. **Its own health check fails too**, which falls out of that rather than being
+arranged, and is the order a rolling deployment needs.
+
+**`api.handle` is what counts requests in flight**, because nothing in `slate:http` does: a server
+knows about connections, and a keep-alive connection with nothing on it is not work. `app.inflight()`
+is the number, and `drain(server, options)` on its own takes an `inflight` of your own for a program
+serving something that is not an api.
+
+**It is built on `slate:http`'s own `close`**, which stops accepting, closes idle connections at once,
+and lets a connection with a request in flight finish that response — node's rule since v19 and
+slate's since **0.0.26**. What `close` does not do is *wait*, and it has no bound; the waiting and the
+bound are what this adds.
+
+**`onShutdown` watches `SIGTERM` and `SIGINT`** — a container stopping and Ctrl-C — and answers a
+function that stops watching. `signals` says which, and `on` and `off` are there for a program that
+watches them itself.
 
 ## Sessions
 
