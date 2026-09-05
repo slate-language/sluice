@@ -512,12 +512,62 @@ that has somewhere to send a defect says so, and how a test watches it happen wi
 run. What the client is told and what the program is told are different things on purpose: the 500's
 `detail` never quotes the fault.
 
+## An application over PostgreSQL
+
+**`examples/tasks/` is a task list backed by a real database**, and it is the whole of this page in
+one place: a session login over `memoryStore`, a body checked against a declared type, a `data
+Failure` whose mapping is proved complete before the program runs, `requestId`, `logger`, `timeout`,
+`rateLimit`, a health check that asks the database, and `drain` on the way out.
+
+```
+PG_URL=postgres://ada:secret@127.0.0.1:5432/tasks slate examples/tasks/main.sl
+```
+
+With no `PG_URL` it connects wherever `psql` would — [pg](https://github.com/slate-language/pg) reads
+`PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD` and `PGDATABASE` when it is given nothing. It makes its
+table if there is none, binds a port the kernel chose, runs a client through every route, and takes
+its own rows away again, so running it twice does what running it once did.
+
+**It is three files because of one seam, and the seam is worth copying.** `tasks.sl` is the
+application and holds no SQL: it is written against a STORE — `list`, `add`, `done`, `remove` and
+`ping`, each answering `{ ok: true, value }` or `{ ok: false, error, code }`, and each of which may
+answer a promise. `postgres.sl` is those five over `pg` and is the only file that knows a statement.
+`main.sl` is the wiring.
+
+```slate
+app.post("/tasks", guarded(body(NewTask, (req) -> made(store, req))))
+
+async made(store, req)
+    val r = await store.add(req.body.title)
+
+    if r.ok then return json(r.value, 201)
+    if r.code == "23505" then return Taken(req.body.title)
+
+    Unavailable(r.error)
+```
+
+**A unique index is what makes a duplicate title one round trip**, and `23505` is the database saying
+the one thing this application already has a word for. Every other code it has nothing to say about,
+so it answers `503` — and a database that is down is an answer rather than a defect, because `pg`
+answers a result for anything that reaches the network.
+
+**Every query is a promise on the loop that is answering HTTP**, which is what `pg` speaking the wire
+protocol in slate buys: a handler waiting for PostgreSQL is the only thing waiting.
+
+The seam is also what makes the example testable. `tests/tasks.sl` writes the same five functions
+over an array and drives every route with no database and no socket, under both hosts;
+`tests/postgres.sl` runs the real store over a real socket against a PostgreSQL server written in
+slate (`tests/pgserver.sl`) and reads what it actually sent. That file needs `slate:net`, which the
+JavaScript back end has not got, so each of its tests asks whether it can bind a socket and says so
+rather than failing.
+
 ## Running the suite and the examples
 
 ```
 slate test tests
 slate test --js tests
 slate examples/notes.sl
+slate examples/tasks/main.sl
 ```
 
 `check/` holds the two hand-run drivers — the exhaustiveness refusal above, and a defect stopping the
@@ -529,9 +579,11 @@ declaration the validator and `?` optional keys are what let a request body have
 the `devDependencies` section below; 0.0.24 made a `data` name one of those shape values, which is
 what `api.failures(Failure, …)` on this page is.
 
-**[logger](https://github.com/slate-language/logger) 0.1.0 is a DEV dependency**, used by the example
-and one test. Installing `sluice` does not install it: a package's own `devDependencies` are resolved
-only when that package is the project being built.
+**[logger](https://github.com/slate-language/logger) 0.1.0 and
+[pg](https://github.com/slate-language/pg) 0.3.0 are DEV dependencies**, used by the examples and by
+four test files. Installing `sluice` installs neither: a package's own `devDependencies` are resolved
+only when that package is the project being built, so nothing this framework puts on a machine
+carries a logger or a database client it did not ask for.
 
 **The suite runs under node as well**, which is what `slate test --js tests` above is: `monotonic`,
 which a request is timed with, is on the JavaScript back end from **slate 0.0.25**. That is this
