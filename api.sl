@@ -105,13 +105,34 @@ export makeApi(options: object) -> object
                        guards: labelsOf(h),
                        handler: deepestOf(h) })
 
-    // A route's handler, with the failure mapping put UNDER its guards rather than over them.
+    // A route's handler, with the failure mapping applied AT EVERY LEVEL of the composition:
+    // around the handler, and again around each guard.
     //
     // **This is the one thing about the order that is not obvious, and it is load-bearing.** A
-    // failure is what the handler answered; every guard above it must see the HTTP response, not
-    // the failure value -- a `logger` over an unmapped failure would report `200` for what went out
-    // as `409`, and a `cors` over one would wrap the failure in an envelope, which would stop it
-    // being recognisable as a failure at all and send it out as a `200`.
+    // failure is what a handler answered; every guard above it must see the HTTP response, not the
+    // failure value -- a `logger` over an unmapped failure would report `200` for what went out as
+    // `409`, and a `cors` over one would wrap the failure in an envelope, which would stop it being
+    // recognisable as a failure at all and send it out as a `200`. That is why the innermost
+    // mapping is under the guards and not over them.
+    //
+    // **But a GUARD may return a failure too**, and one mapping under all of them never sees it: a
+    // `guardOf` of the application's own answering `NotSignedIn` met nothing that would translate
+    // it and went out as a `200` carrying a rendered data value -- an empty object, for a variant
+    // with no fields -- and nothing warned. So there is a mapping between every pair of guards as
+    // well, which is the only arrangement that keeps both halves: whatever answered a failure, the
+    // thing directly above it sees the HTTP response that failure became, whether that thing is a
+    // guard or the server.
+    //
+    // **One mapping OVER the whole stack would not do it**, and that is worth saying because it is
+    // the obvious repair: the outermost mapping would translate an inner guard's failure only after
+    // every guard above that one had already read it as a data value, so a `logger` over a
+    // refusing guard would report `200` for what the client received as `403`.
+    //
+    // **Applying it twice to one answer costs nothing**: a mapping only fires for a value
+    // `failureShape.test` says is a failure, and what the mapping answers is a response. So a
+    // handler's failure is translated once, at the innermost application, and passes through the
+    // rest untouched. What it costs is one call per guard on the way out, on a path that already
+    // awaits every one of them.
     //
     // **The guards are composed here, once, when the route is added.** They were composed once
     // already by `stack`, whose answer is a working handler in its own right; this puts the same
@@ -122,8 +143,14 @@ export makeApi(options: object) -> object
             throw "a route needs a function to call, and this is not one"
 
         val wrappers = if h is object && has(h, "wrappers") then h.wrappers else []
+        var out = mapped(deepestOf(h))
+        var i = len(wrappers) - 1
 
-        compose(wrappers, mapped(deepestOf(h)))
+        while i >= 0
+            out = mapped(wrappers[i](out))
+            i = i - 1
+
+        out
 
     // The handler with the application's failure mapping around it.
     //

@@ -42,10 +42,10 @@ is, and everything it already does — keep-alive, compression, TLS, `serveStrea
 2. **A guard adds to the request with `with`, never by mutation.** `bearer` hands on
    `req with { user }`; `body(Shape, h)` replaces `req.body` with the parsed value and keeps the
    text on `req.raw`. The request you handed to `handle` is still the value it was.
-3. **A failure is a value a handler RETURNS.** `api.failures(Shape, fn)` registers the shape and the
-   mapping, and because `fn` is annotated `(f: Failure) -> …`, slate's exhaustiveness rule proves
-   before the program runs that every failure the application can produce has an HTTP answer.
-   Nothing in express or axum can check that.
+3. **A failure is a value a handler RETURNS** — or a guard. `api.failures(Shape, fn)` registers the
+   shape and the mapping, and because `fn` is annotated `(f: Failure) -> …`, slate's exhaustiveness
+   rule proves before the program runs that every failure the application can produce has an HTTP
+   answer. Nothing in express or axum can check that.
 4. **RFC 9457 problem details by default** — `application/problem+json` with `type`, `title`,
    `status`, `detail` and `instance`. 404, 405, 400, 401 and 500 all go out as problem documents.
 5. **`await api.handle(request)` answers a response with no socket in it.** Every test of this
@@ -525,9 +525,23 @@ that refusal is the whole argument for returning failures rather than throwing t
 error: this match does not cover every Failure -- `Taken` is unmatched. Add an arm for it, or `_` for whatever is left
 ```
 
-**The mapping runs under the guards, not over them**, which matters more than it looks: a `logger`
-above an unmapped failure would report `200` for what a client received as `409`, and a `cors` above
-one would wrap the failure in an envelope and send it out as a `200`.
+**The mapping is applied at every level of a route's composition** — around the handler, and again
+around each guard — which matters more than it looks. Under the guards, because a `logger` above an
+untranslated failure would report `200` for what a client received as `409`, and a `cors` above one
+would wrap the failure in an envelope and send it out as a `200`. Between them, because **a guard may
+return a failure too**:
+
+```slate
+val needsSession = guardOf("needsSession", (h) -> (req) -> ifSomebody(h, req))
+
+ifSomebody(h, req) = if req.session.value == null then NotSignedIn else h(req)
+```
+
+**So a guard refuses exactly the way a handler does**, and everything above it — another guard, or
+the server — sees the HTTP response that failure became. A guard answering a `problem(…)` document
+directly is still an ordinary thing to write, and `bearer`'s own `401` is one; what changed in 0.3.0
+is that it is no longer the only thing that works. Where an application registered no mapping, a
+guard's failure goes out exactly as a handler's does: the value itself.
 
 ## A defect is still a defect
 

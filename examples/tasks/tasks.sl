@@ -90,12 +90,12 @@ answer(f: Failure) = f match
 // **A guard of this application's own**, which is what `guardOf` is for: it is composed like every
 // other one and `api.routes()` prints it by the name given here.
 //
-// **A GUARD ANSWERS HTTP AND NOT A FAILURE**, which is the one thing about this package that is not
-// obvious from the outside: `api.add` composes a route's guards AROUND the failure mapping rather
-// than over it, so that a `logger` above a failure reports the status the client was really given.
-// A guard returning `Failure` is therefore above the only thing that would have translated it, and
-// what goes out is a `200` carrying a rendered data value. That is why this answers a problem
-// document directly, exactly as `bearer`'s own 401 does.
+// **A guard refuses the way a handler does**: it may answer a problem document directly, as this one
+// does and as `bearer`'s own 401 does, or it may return one of `Failure`'s variants and let the
+// application's mapping say what that is as HTTP. The mapping is applied at every level of a route's
+// composition, so whichever it answers, a `logger` above it reports the status the client was really
+// given. This one is a problem document because "there is nobody logged in" is not a failure of the
+// task store, which is what `Failure` here is about.
 val needsSession = guardOf("needsSession", (h) -> (req) -> ifSomebody(h, req))
 
 ifSomebody(h, req) = if req.session.value == null then anybody() else h(req)

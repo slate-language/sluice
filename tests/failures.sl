@@ -1,6 +1,6 @@
 // `failures` -- a failure is a value the handler returns, and the mapping is checked by slate.
 
-import { api, json, logger, cors, request } from "../sluice.sl"
+import { api, stack, json, logger, cors, guardOf, request } from "../sluice.sl"
 import { doc, status, header } from "./support.sl"
 
 // What this application can fail with. **A closed set**, which is what makes the `match` below worth
@@ -120,3 +120,63 @@ async A_GUARD_THAT_READS_THE_ANSWER_DOES_NOT_HIDE_A_FAILURE_FROM_THE_MAPPING()
 
     assertEq(status(r), 409)
     assertEq(header(r, "Access-Control-Allow-Origin"), "*")
+
+// -- a guard that refuses by RETURNING a failure ---------------------------------------------------
+
+// **A guard of the application's own, refusing the way a handler does.** It used to be that only a
+// handler could: the mapping sat under every guard, so a `Failure` a guard returned met nothing that
+// would translate it and went out as a `200` carrying a rendered data value. The mapping is applied
+// between every pair of guards now, so whatever answered a failure, the thing above it sees HTTP.
+val needsNote = guardOf("needsNote", (h) -> (req) -> unlessAnonymous(h, req))
+
+unlessAnonymous(h, req) = if has(req.headers, "x-note") then h(req) else NotYours
+
+carrying(v) -> object = { headers: { "X-Note": v } }
+
+@test
+async A_FAILURE_A_GUARD_RETURNS_IS_MAPPED_EXACTLY_AS_A_HANDLER_S_IS()
+    val app = api()
+
+    app.failures(Failure, answer)
+    app.get("/notes/:id", stack([needsNote])((req) -> json({ id: 7 }, 200)))
+
+    assertEq(await app.handle(request("GET", "/notes/7")), { status: 403, body: "not yours" })
+    // The control: the same route, the same guard, and a request the guard lets through.
+    assertEq(status(await app.handle(request("GET", "/notes/7", carrying("yes")))), 200)
+
+@test
+async A_LOGGER_ABOVE_A_REFUSING_GUARD_REPORTS_THE_STATUS_THE_CLIENT_GOT()
+    // The same thing the handler case has always promised, read one level out: a guard above a
+    // refusal must see the response and not the failure value.
+    var seen = []
+    val app = api()
+
+    app.failures(Failure, answer)
+    app.get("/notes/:id", stack([logger((r) -> push(seen, r)), needsNote])((req) -> json({ id: 7 }, 200)))
+
+    assertEq(status(await app.handle(request("GET", "/notes/7"))), 403)
+    assertEq(seen[0].status, 403)
+
+@test
+async A_GUARD_THAT_READS_THE_ANSWER_DOES_NOT_HIDE_A_REFUSING_GUARD_S_FAILURE()
+    // `cors` over an untranslated failure wraps it in an envelope, which is what stopped it being
+    // recognisable as a failure at all. It sees a `403` here, the same as over a handler's.
+    val app = api()
+
+    app.failures(Failure, answer)
+    app.get("/notes/:id", stack([cors({}), needsNote])((req) -> json({ id: 7 }, 200)))
+
+    val r = await app.handle(request("GET", "/notes/7", { headers: { Origin: "https://a.example" } }))
+
+    assertEq(status(r), 403)
+    assertEq(header(r, "Access-Control-Allow-Origin"), "*")
+
+@test
+async WITHOUT_A_MAPPING_A_GUARD_S_FAILURE_IS_WHAT_A_HANDLER_S_IS()
+    // Nothing is guessed at here either: an application that registered no failures gets the value
+    // back as the answer, whichever level of the composition returned it.
+    val app = api()
+
+    app.get("/notes/:id", stack([needsNote])((req) -> json({ id: 7 }, 200)))
+
+    assertEq(await app.handle(request("GET", "/notes/7")), NotYours)
