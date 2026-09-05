@@ -413,8 +413,11 @@ async A_STORED_SESSION_ROUND_TRIPS_AND_THE_COOKIE_CARRIES_ONLY_AN_ID()
     val cookie = await cookieFrom(app)
 
     // **What went out is read as a payload and not searched for as a substring.** The id and the
-    // digest are both hex, and `ada` is three hex digits -- so a search of the whole cookie for the
-    // session's own value fails about once in forty runs on a cookie that is perfectly correct.
+    // digest are random text -- hex when this was found, base64url now -- and `ada` is three
+    // perfectly ordinary characters of either, so a search of the whole cookie for the session's own
+    // value fails now and then on a cookie that is entirely correct. It was about once in forty runs
+    // over hex; base64url has four times the alphabet and makes it rarer, which is a worse kind of
+    // flake and not a fix.
     assert(!has(payloadOf(cookie), "v"))
     assert(payloadOf(cookie).i is string)
     assertEq(store.size(), 1)

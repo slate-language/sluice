@@ -40,7 +40,7 @@ sockets() -> boolean
         // **The note goes to `stderr` and not to `print`**, because the runner keeps what a passing
         // test wrote and shows it only above a failure -- said with `print`, a skip is something
         // nobody is ever told about.
-        stderr("tests/hangup.sl: no sockets on this host, so the hang-up tests assert nothing -- " +
+        stderr("--    tests/hangup.sl needs a real socket, and this host has none: " +
             e.message + "\n")
 
     Host.has
