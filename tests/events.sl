@@ -90,9 +90,10 @@ async A_SUBSCRIBER_KEEPING_UP_DROPS_NOTHING()
 
 @test
 async CLOSING_A_SUBSCRIBER_TAKES_IT_OFF_THE_TOPIC()
-    // **This is the leak that actually happens.** `slate:http`'s writer stops pulling from a source
-    // when a connection ends and does not tell the source, so a subscriber nobody closes stays on
-    // the topic for the life of the program -- and `count` is the only thing that can see it.
+    // **A program ending a subscription of its own**, which is the half that is written here: the
+    // other half is a reader that goes away, where `slate:http`'s writer calls this same `close`
+    // and no program is told anything. That one needs a socket and is in `tests/hangup.sl`.
+    // `count` is the only thing that can see either.
     val feed = hub()
     val one = feed.subscribe("notes")
     val two = feed.subscribe("notes")

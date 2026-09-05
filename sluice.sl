@@ -188,8 +188,10 @@ export csrf(options: object = {}, handler = null) = applied(csrfGuard(options), 
 //
 //     app.get("/events", (req) -> sse(feed.subscribe("notes")))
 //
-// **`close()` on that source has to be called when the stream ends**, `slate:http`'s writer not
-// telling a source that nobody is pulling from it any more.
+// **The writer closes that source when the reader has gone**, which is `slate:http`'s from slate
+// 0.0.29: a response that ends with its source unexhausted tells the source so, and `sse` forwards
+// it. `close()` is still there for a program ending a subscription itself, and calling it twice is
+// the same as calling it once.
 //
 // `options` takes `replay`, which is how many events of every topic the hub keeps for a client that
 // reconnects -- `0`, keeping nothing, by default. `subscribe`'s options are `bound`, how far behind

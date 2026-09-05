@@ -109,10 +109,18 @@ export makeHub(options: object = {}) -> object
     // `subscribe(topic, options)` -- a source of everything published to `topic` from now on, and of
     // what it missed where `lastEventId` says where it left off.
     //
-    // **`close()` HAS TO BE CALLED and nothing calls it for you**, which is this design's one sharp
-    // edge: `slate:http`'s writer stops pulling from a source when a connection ends and does not
-    // tell the source, so a subscriber nobody closes stays on the topic for the life of the program.
-    // A handler that ends a stream calls `close`, and `count` is how a test says it worked.
+    // **THE WRITER CLOSES THIS WHEN THE READER HAS GONE, WHICH IS slate 0.0.29's DOING AND NOT THIS
+    // FILE'S.** A streamed response that ends with its source unexhausted -- a browser tab closed, a
+    // socket cut off under the response, a peer that reset the stream -- calls `close` on the source
+    // it was reading, and `sse` forwards that to the source it was given. So a subscriber whose
+    // client went away leaves the topic with nothing written here at all. Before that a writer told
+    // a source nothing, and every tab ever opened stayed on the topic for the life of the program.
+    //
+    // **`close` IS STILL THE PROGRAM'S TO CALL FOR A SUBSCRIPTION IT IS ENDING ITSELF** -- a handler
+    // that stops a stream, a test taking a subscriber off a topic -- and it is idempotent, so the
+    // two cannot fight. `count` is what says either of them worked, and `tests/hangup.sl` is the one
+    // test here that binds a port, because a writer noticing that nobody is reading is the one thing
+    // a handler driven directly cannot show.
     subscribe(topic: string, options: object = {}) -> object
         val one = { queue: [], waiting: null, dropped: 0, closed: false,
                     bound: options.bound ?? Backlog }

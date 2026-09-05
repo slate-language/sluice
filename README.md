@@ -48,9 +48,10 @@ is, and everything it already does — keep-alive, compression, TLS, `serveStrea
    Nothing in express or axum can check that.
 4. **RFC 9457 problem details by default** — `application/problem+json` with `type`, `title`,
    `status`, `detail` and `instance`. 404, 405, 400, 401 and 500 all go out as problem documents.
-5. **`await api.handle(request)` answers a response with no socket in it.** The whole suite of this
-   package is written that way: no port, no client, no watchdog, and nothing that can flake under
-   load.
+5. **`await api.handle(request)` answers a response with no socket in it.** Every test of this
+   package but one is written that way: no port, no client, no watchdog, and nothing that can flake
+   under load. The exception is a browser that hangs up mid-stream, which is the one thing a handler
+   driven directly cannot show.
 
 ## Testing a handler without a port
 
@@ -454,10 +455,17 @@ newest state and not a backlog, and the alternative to dropping is a queue one s
 until the server runs out of memory. `source.dropped()` says how many went, so a client falling
 behind is a number rather than a silence.
 
-**`source.close()` has to be called when a stream ends, and nothing calls it for you.** `slate:http`'s
-writer stops pulling from a source when a connection ends and does not tell the source, so a
-subscriber nobody closes stays on the topic for the life of the program. `feed.count(topic)` is how
-you see that, and how the suite proves it.
+**A subscriber whose reader has gone is let go of, and nothing in your program has to notice.** From
+slate 0.0.29 a streamed response that ends with its source unexhausted — a tab closed, a socket cut
+off, a peer that reset the stream — calls `close` on the source, and `sse` forwards that to the
+source it was given. So a browser that goes away takes its subscription with it: `feed.count(topic)`
+falls, and no handler was told anything.
+
+**`source.close()` is still yours to call for a subscription you are ending yourself** — a stream
+your program stops, a subscriber a test is done with — and it is idempotent, so it costs nothing to
+call one the writer has already closed. `feed.count(topic)` is how either is seen, and it is what
+`tests/hangup.sl` — the one test in this package that binds a port — asserts against a real client
+that hangs up mid-stream.
 
 ### Replay, for a client that reconnects
 
