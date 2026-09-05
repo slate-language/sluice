@@ -36,7 +36,8 @@ import { sessionGuard, csrfGuard } from "./sessions.sl"
 import { requestIdGuard, timeoutGuard, rateLimitGuard, rateStore as makeStore } from "./operations.sl"
 import { multipartGuard } from "./multipart.sl"
 import { drainServer, onShutdown as watchSignals } from "./lifecycle.sl"
-import { makeHub } from "./events.sl"
+import { makeMemoryStore } from "./store.sl"
+import { makeHub, lastSeenId } from "./events.sl"
 import { request as makeRequest } from "./testing.sl"
 
 // -- the api -----------------------------------------------------------------------------------------
@@ -84,15 +85,22 @@ export cors(options: object, handler = null) = applied(corsGuard(options), handl
 // `logger(sink, handler)` -- `sink({ method, path, status, ms })` once the answer is known.
 export logger(sink: function, handler = null) = applied(loggerGuard(sink), handler)
 
-// `session(secret, options, handler)` -- a signed cookie carrying the session itself.
+// `session(secret, options, handler)` -- a signed cookie carrying the session, or a signed id into a
+// store.
 //
-// A handler is given `req.session`, which is `{ value, set }`: `value` is what the cookie said, or
-// `null` where there was no cookie, where it had been tampered with, or where it had expired; `set`
-// writes a new one, and `set(null)` clears it. **The cookie is written only where `set` was called.**
+// A handler is given `req.session`, which is `{ value, set, destroy }`: `value` is what the session
+// said, or `null` where there was none, where the cookie had been tampered with, where it had
+// expired, or where a store no longer has it; `set` writes a new one, `set(null)` clears it, and
+// `destroy()` is that with a name. **The cookie is written only where `set` or `destroy` was
+// called.**
 //
-// `options` takes `name` (`"session"`), `maxAge` in seconds, and anything `setCookie` takes -- the
-// defaults being `httpOnly`, `sameSite: "Lax"`, `path: "/"`, and `secure` where the request arrived
-// over https.
+// **`store` is what buys revocation and a session bigger than a cookie.** With one, the cookie
+// carries only a signed opaque id and the value lives in the store; a session that is written is
+// written under a new id, and `destroy()` deletes the entry rather than merely forgetting it.
+//
+// `options` takes `name` (`"session"`), `store`, `maxAge` in seconds, and anything `setCookie` takes
+// -- the defaults being `httpOnly`, `sameSite: "Lax"`, `path: "/"`, and `secure` where the request
+// arrived over https.
 export session(secret: string, options: object = {}, handler = null) =
     applied(sessionGuard(secret, options), handler)
 
@@ -153,6 +161,17 @@ export drain(server, options: object = {}) = drainServer(server, options)
 // `options` takes `signals`, and `on` and `off` for a program that watches them itself.
 export onShutdown(action: function, options: object = {}) -> function = watchSignals(action, options)
 
+// `memoryStore(options)` -- somewhere for a session to live, in this process's memory.
+//
+// **A store is three functions**: `get(id)`, `set(id, value, ttl)` and `delete(id)`, each of which
+// may answer a promise, so a store over redis or a database is a plain object a program writes
+// itself and this one is the reference. `ttl` is in milliseconds.
+//
+// `options` takes `ttl`, a default lifetime for an entry set without one, and `now`, a clock
+// answering milliseconds since the epoch -- which is what makes expiry testable without a sleep.
+// The store also answers `size()`, which is not part of the interface a store has to meet.
+export memoryStore(options: object = {}) -> object = makeMemoryStore(options)
+
 // `csrf(options, handler)` -- the double-submit cookie.
 //
 // A random token in a cookie a script can read, required back in a header on `POST`, `PUT`, `PATCH`
@@ -162,7 +181,8 @@ export onShutdown(action: function, options: object = {}) -> function = watchSig
 // `options` takes `name` (`"csrf"`) and `header` (`"x-csrf-token"`).
 export csrf(options: object = {}, handler = null) = applied(csrfGuard(options), handler)
 
-// `hub()` -- an event hub: `publish(topic, value)`, `subscribe(topic, options)` and `count(topic)`.
+// `hub(options)` -- an event hub: `publish(topic, value)`, `subscribe(topic, options)` and
+// `count(topic)`.
 //
 // `subscribe` answers a SOURCE, which is what `sse` takes, so a route is one line:
 //
@@ -170,7 +190,23 @@ export csrf(options: object = {}, handler = null) = applied(csrfGuard(options), 
 //
 // **`close()` on that source has to be called when the stream ends**, `slate:http`'s writer not
 // telling a source that nobody is pulling from it any more.
-export hub() -> object = makeHub()
+//
+// `options` takes `replay`, which is how many events of every topic the hub keeps for a client that
+// reconnects -- `0`, keeping nothing, by default. `subscribe`'s options are `bound`, how far behind
+// a subscriber may fall before the oldest of its events are dropped (256), and `lastEventId`, the id
+// a returning client last saw.
+export hub(options: object = {}) -> object = makeHub(options)
+
+// `lastEventId(req)` -- the id a reconnecting client says it last saw, or `null`.
+//
+// **The route reads it and hands it to `subscribe`**, which is what keeps the hub one-way: a hub
+// knows about topics and not about requests, and `sse` takes a source and not a request.
+//
+//     app.get("/events", (req) -> sse(feed.subscribe("notes", { lastEventId: lastEventId(req) })))
+//
+// The `Last-Event-ID` header is what a browser sends on its own; the `lastEventId` query parameter
+// is read as well, for a client that cannot put a header on an `EventSource`.
+export lastEventId(req: object) -> string | null = lastSeenId(req)
 
 // `sse(source, options)` -- an event stream, re-exported from `slate:http` so that answering with
 // one does not mean importing a second module beside this.

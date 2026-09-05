@@ -3,7 +3,7 @@
 // **Not one of these needs a port.** A streamed response is a source, so a test pulls events out of
 // a handler's answer exactly as the server would, which is what keeps this in the ordinary suite.
 
-import { api, hub, sse, cors, logger, request, response } from "../sluice.sl"
+import { api, hub, sse, lastEventId, cors, logger, request, response } from "../sluice.sl"
 import { doc, status, header } from "./support.sl"
 
 @test
@@ -195,3 +195,222 @@ async A_HANDLER_ANSWERING_A_STREAM_IS_AN_ORDINARY_ROUTE()
     assertEq(step.done, false)
     assert(contains(step.value, "event: made"))
     assert(contains(step.value, "data: {\"id\":7}"))
+
+// -- Last-Event-ID replay ----------------------------------------------------------------------------
+
+@test
+async A_HUB_THAT_WAS_NOT_ASKED_TO_REPLAY_LEAVES_AN_EVENT_EXACTLY_AS_PUBLISHED()
+    // **The default is off and off means untouched.** A hub that remembers nothing cannot honour a
+    // `Last-Event-ID`, so sending an id would promise a client something the hub could not keep --
+    // a browser holds the last id it saw and asks for what came after it, and would silently get
+    // nothing.
+    val feed = hub()
+    val one = feed.subscribe("notes", { lastEventId: "1" })
+
+    feed.publish("notes", "first")
+
+    val step = await one.next()
+
+    assertEq(step.value, "first")
+    assertEq(step.done, false)
+
+@test
+async AN_EVENT_ON_A_REPLAYING_HUB_CARRIES_THE_ID_IT_WILL_BE_ASKED_FOR()
+    // **An object is given an `id` member and anything else is wrapped as its `data`**, which is
+    // `slate:http`'s own shape for a piece of an event stream. So the id the hub assigned is the id
+    // the client is sent, with nothing in between.
+    val feed = hub({ replay: 8 })
+    val one = feed.subscribe("notes")
+
+    feed.publish("notes", "plain")
+    feed.publish("notes", { event: "made", data: { id: 7 } })
+
+    val first = (await one.next()).value
+
+    assertEq(first.id, "1")
+    assertEq(first.data, "plain")
+
+    val second = (await one.next()).value
+
+    assertEq(second.id, "2")
+    assertEq(second.event, "made")
+    assertEq(second.data.id, 7)
+
+@test
+async IDS_INCREASE_BY_ONE_AND_EACH_TOPIC_COUNTS_ITS_OWN()
+    // **The ids are the topic's**, because that is what `Last-Event-ID` means: a client reconnects to
+    // the stream it was reading, and an id from another topic would place it somewhere arbitrary in
+    // this one.
+    val feed = hub({ replay: 8 })
+    val here = feed.subscribe("notes")
+    val there = feed.subscribe("users")
+
+    for i in 0..<3
+        feed.publish("notes", i)
+        feed.publish("users", i)
+
+    for want in ["1", "2", "3"]
+        assertEq((await here.next()).value.id, want)
+        assertEq((await there.next()).value.id, want)
+
+@test
+async A_CLIENT_THAT_RECONNECTS_IS_HANDED_WHAT_IT_MISSED_AND_THEN_GOES_LIVE()
+    // **The whole item.** A browser drops the connection, reconnects with the id it last saw, and
+    // what it missed is delivered before anything new -- which is what makes a feed a feed rather
+    // than a window onto whatever happens next.
+    val feed = hub({ replay: 8 })
+    val first = feed.subscribe("notes")
+
+    feed.publish("notes", "one")
+    feed.publish("notes", "two")
+
+    val seen = (await first.next()).value
+
+    assertEq(seen.data, "one")
+
+    first.close()
+
+    feed.publish("notes", "three")
+
+    val again = feed.subscribe("notes", { lastEventId: seen.id })
+
+    assertEq((await again.next()).value.data, "two")
+    assertEq((await again.next()).value.data, "three")
+
+    // And then it is an ordinary live subscriber.
+    feed.publish("notes", "four")
+
+    assertEq((await again.next()).value.data, "four")
+
+@test
+async A_SUBSCRIBER_THAT_SAYS_NOTHING_GETS_NOTHING_BACK()
+    // The control for the test above: replay happens because a client asked for it by id, and a
+    // fresh `EventSource` -- which sends no header -- starts at the live edge.
+    val feed = hub({ replay: 8 })
+
+    feed.publish("notes", "before")
+
+    val one = feed.subscribe("notes")
+
+    feed.publish("notes", "after")
+
+    assertEq((await one.next()).value.data, "after")
+
+@test
+async AN_ID_OLDER_THAN_THE_BUFFER_IS_HANDED_EVERYTHING_HELD_AND_TOLD_NOTHING()
+    // **That is what a browser expects.** `EventSource` has no way of being told it missed something
+    // and no way of asking again, so a hole is delivered as an ordinary gap in the ids: a client that
+    // must not have one checks them, and one that only wants the current state carries on.
+    val feed = hub({ replay: 2 })
+    val watching = feed.subscribe("notes")
+
+    for i in 1..5
+        feed.publish("notes", i)
+
+    val late = feed.subscribe("notes", { lastEventId: "1" })
+
+    assertEq((await late.next()).value.data, 4)
+    assertEq((await late.next()).value.data, 5)
+
+    // Nothing was said about the two that fell out of the ring: the drop count is about this
+    // subscriber falling behind, and this one never did.
+    assertEq(late.dropped(), 0)
+
+@test
+async AN_ID_THIS_HUB_DID_NOT_WRITE_REPLAYS_NOTHING_AND_GOES_LIVE()
+    // A `Last-Event-ID` arrives from outside the program -- from another server, from a proxy that
+    // rewrote it, from somebody typing -- so nonsense in it is a condition and not a defect. A
+    // position that cannot be read is no position at all, and answering the whole ring instead would
+    // hand a client that reconnected to the wrong server a burst it had already seen.
+    val feed = hub({ replay: 8 })
+
+    feed.publish("notes", "old")
+
+    for bad in ["", "abc", "1.5", "-", " 1"]
+        val one = feed.subscribe("notes", { lastEventId: bad })
+
+        feed.publish("notes", "live")
+
+        assertEq((await one.next()).value.data, "live")
+
+        one.close()
+
+@test
+async A_REPLAY_LONGER_THAN_THE_BOUND_DROPS_ITS_OLDEST_AND_COUNTS_THEM()
+    // **The replay goes through the queue the live events go through**, so one rule about falling
+    // behind rather than two: a client whose backlog is bigger than it is willing to hold loses the
+    // oldest of it, and the count says so.
+    val feed = hub({ replay: 8 })
+
+    for i in 1..6
+        feed.publish("notes", i)
+
+    val slow = feed.subscribe("notes", { lastEventId: "0", bound: 2 })
+
+    assertEq(slow.dropped(), 4)
+    assertEq((await slow.next()).value.data, 5)
+    assertEq((await slow.next()).value.data, 6)
+
+@test
+async REPLAY_ON_A_TOPIC_NOBODY_EVER_PUBLISHED_TO_IS_NOTHING_RATHER_THAN_A_FAULT()
+    val feed = hub({ replay: 8 })
+    val one = feed.subscribe("quiet", { lastEventId: "3" })
+
+    feed.publish("quiet", "first")
+
+    assertEq((await one.next()).value.data, "first")
+
+// -- the id off the request --------------------------------------------------------------------------
+
+@test
+async lastEventId_READS_THE_HEADER_A_BROWSER_SENDS()
+    assertEq(lastEventId(request("GET", "/events", { headers: { "Last-Event-ID": "7" } })), "7")
+
+@test
+async lastEventId_READS_THE_QUERY_PARAMETER_A_CLIENT_THAT_CANNOT_SET_HEADERS_USES()
+    // The browser API takes a URL and nothing else, so a polyfill -- or a `curl` reconnecting by
+    // hand -- has nowhere to put a header.
+    assertEq(lastEventId(request("GET", "/events", { query: { lastEventId: "7" } })), "7")
+
+@test
+async lastEventId_IS_null_WHERE_THERE_IS_NONE_AND_WHERE_IT_IS_EMPTY()
+    assertEq(lastEventId(request("GET", "/events")), null)
+    assertEq(lastEventId(request("GET", "/events", { headers: { "Last-Event-ID": "" } })), null)
+    assertEq(lastEventId(request("GET", "/events", { query: { lastEventId: "" } })), null)
+
+@test
+async A_ROUTE_REPLAYS_WHAT_THE_REQUEST_ASKED_FOR_AND_THE_ID_IS_ON_THE_WIRE()
+    // **The shape a program actually writes**, and the reason the id is read at the route: a hub
+    // knows about topics and not about requests, and `sse` takes a source and not a request.
+    val app = api()
+    val feed = hub({ replay: 8 })
+
+    app.get("/events", (req) -> sse(feed.subscribe("notes", { lastEventId: lastEventId(req) })))
+
+    feed.publish("notes", { event: "made", data: { id: 7 } })
+
+    val r = response(await app.handle(
+        request("GET", "/events", { headers: { "Last-Event-ID": "0" } })))
+
+    val step = await r.body.next()
+
+    assertEq(step.done, false)
+    assert(contains(step.value, "id: 1"))
+    assert(contains(step.value, "event: made"))
+    assert(contains(step.value, "data: {\"id\":7}"))
+
+@test
+async AN_ID_AHEAD_OF_EVERYTHING_HELD_REPLAYS_NOTHING_AND_GOES_LIVE()
+    // **A server that restarted counts from 1 again**, so a client reconnecting to it holds an id
+    // ahead of anything this hub has. Nothing is replayed and the stream is live, which is the only
+    // answer that cannot deliver something the client has already seen.
+    val feed = hub({ replay: 8 })
+
+    for i in 1..3
+        feed.publish("notes", i)
+
+    val ahead = feed.subscribe("notes", { lastEventId: "500" })
+
+    feed.publish("notes", "live")
+
+    assertEq((await ahead.next()).value.data, "live")

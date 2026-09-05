@@ -2,7 +2,7 @@
 
 import { percentDecode } from slate:http
 
-import { api, session, csrf, json, request, response } from "../sluice.sl"
+import { api, session, csrf, json, memoryStore, request, response } from "../sluice.sl"
 import { doc, status, header } from "./support.sl"
 
 val Secret = "a secret nobody else has"
@@ -14,6 +14,7 @@ made(secret: string, options: object = {}) -> object
     app.get("/me", session(secret, options, (req) -> json({ who: req.session.value })))
     app.post("/in", session(secret, options, (req) -> logIn(req)))
     app.post("/out", session(secret, options, (req) -> logOut(req)))
+    app.post("/gone", session(secret, options, (req) -> destroyed(req)))
 
     app
 
@@ -26,6 +27,13 @@ logIn(req: object) -> object
 
 logOut(req: object) -> object
     req.session.set(null)
+
+    json({ ok: true })
+
+// The same thing said the other way. **`destroy()` is `set(null)` with a name**, and what a store
+// turns it into is a `delete`.
+destroyed(req: object) -> object
+    req.session.destroy()
 
     json({ ok: true })
 
@@ -304,3 +312,295 @@ async THE_COOKIE_AND_THE_HEADER_ARE_BOTH_NAMEABLE()
 
     assertEq(status(await app.handle(request("POST", "/write",
         { cookies: { xsrf: "abc" }, headers: { "x-csrf-token": "abc" } }))), 403)
+
+// -- a session in a store ----------------------------------------------------------------------------
+//
+// **The same guard, the same cookie format and the same `req.session`.** What changes is what the
+// `v` member of the payload is: the session itself with no store, and an opaque id into one with.
+
+// The cookie a login answers, ready to be sent back.
+async cookieFrom(app: object, body: string = "\"ada\"") -> string
+    val r = await app.handle(request("POST", "/in", { body: body }))
+
+    valueOf(cookies(r)[0])
+
+// What the signed payload of a cookie says, which is how a test reads what is actually in it.
+payloadOf(raw: string) -> object
+    val at = lastIndexOf(raw, ".")
+    val parsed = parseJSON(raw[0..<at])
+
+    if !parsed.ok then throw "that cookie carries no payload: " + raw
+
+    parsed.value
+
+// A store that counts what it was asked. **This is also the whole argument for the interface being
+// three plain functions**: wrapping one is an object literal, with nothing to subclass and nothing to
+// register.
+counted(store: object) -> object
+    val seen = { gets: 0 }
+
+    async get(id: string)
+        seen.gets = seen.gets + 1
+
+        await store.get(id)
+
+    { get: get, set: store.set, delete: store.delete, seen: seen, size: store.size }
+
+@test
+async A_STORED_SESSION_ROUND_TRIPS_AND_THE_COOKIE_CARRIES_ONLY_AN_ID()
+    // **The round trip and the point of the mode in one test.** What comes back is the session; what
+    // went out is an id, and the value is nowhere near the client.
+    val store = memoryStore()
+    val app = made(Secret, { store: store })
+    val cookie = await cookieFrom(app)
+
+    assert(!contains(cookie, "ada"))
+    assert(payloadOf(cookie).i is string)
+    assertEq(store.size(), 1)
+
+    val back = await app.handle(request("GET", "/me", { cookies: { session: cookie } }))
+
+    assertEq(doc(back).who, "ada")
+
+    // And reading one writes nothing: no cookie, and the entry that was there is the entry that is
+    // there. A store mode that rewrote on every read would be a database write per request.
+    assertEq(len(cookies(back)), 0)
+    assertEq(store.size(), 1)
+
+@test
+async A_STORED_SESSION_MAY_BE_BIGGER_THAN_A_COOKIE()
+    // **The other half of what a store buys.** A signed cookie is about 4 KB and this is 40, so the
+    // limit stops being one a program has to think about.
+    val store = memoryStore()
+    val app = made(Secret, { store: store })
+    val big = repeat("x", 40000)
+    val cookie = await cookieFrom(app, toJSON(big))
+
+    assert(len(cookie) < 200)
+
+    val back = await app.handle(request("GET", "/me", { cookies: { session: cookie } }))
+
+    assertEq(len(doc(back).who), 40000)
+
+@test
+async REVOKING_A_STORED_SESSION_IS_A_delete_AND_THE_COOKIE_IS_THEN_NOBODY()
+    // **This is what a store is for.** The same cookie, unchanged and perfectly signed, stops being
+    // anybody the moment the server says so -- which a signed cookie on its own cannot do at all.
+    val store = memoryStore()
+    val app = made(Secret, { store: store })
+    val cookie = await cookieFrom(app)
+
+    await store.delete(payloadOf(cookie).i)
+
+    assertEq(doc(await app.handle(request("GET", "/me", { cookies: { session: cookie } }))).who, null)
+
+@test
+async destroy_REVOKES_IN_STORE_MODE_RATHER_THAN_MERELY_FORGETTING()
+    val store = memoryStore()
+    val app = made(Secret, { store: store })
+    val cookie = await cookieFrom(app)
+
+    val out = await app.handle(request("POST", "/gone", { cookies: { session: cookie } }))
+
+    // The entry is gone from the server, and the cookie is cleared at the client.
+    assertEq(store.size(), 0)
+    assert(contains(cookies(out)[0], "Max-Age=0"))
+    assertEq(doc(await app.handle(request("GET", "/me", { cookies: { session: cookie } }))).who, null)
+
+@test
+async destroy_WITH_NO_STORE_CLEARS_THE_COOKIE()
+    // **Both modes answer the same call**, so a program that grows a store later changes one option
+    // and nothing else.
+    val out = await made(Secret).handle(
+        request("POST", "/gone", { cookies: { session: await signedIn() } }))
+
+    assert(contains(cookies(out)[0], "Max-Age=0"))
+
+@test
+async A_SESSION_THAT_IS_WRITTEN_IS_WRITTEN_UNDER_A_NEW_ID()
+    // **Session fixation, which is the one attack a store can walk into.** An id planted in
+    // somebody's browser before they log in must not be the id they are logged in under, or whoever
+    // planted it is logged in too. So a `set` mints a new id and deletes the old one, and the store
+    // does not grow a session per login.
+    val store = memoryStore()
+    val app = made(Secret, { store: store })
+    val first = await cookieFrom(app)
+
+    val second = valueOf(cookies(await app.handle(
+        request("POST", "/in", { body: "\"ada\"", cookies: { session: first } })))[0])
+
+    assert(payloadOf(first).i != payloadOf(second).i)
+    assertEq(store.size(), 1)
+    assertEq(await store.get(payloadOf(first).i), null)
+    assertEq((await store.get(payloadOf(second).i)), "ada")
+
+@test
+async A_TAMPERED_ID_IS_NOBODY_AND_THE_STORE_IS_NEVER_ASKED()
+    // **The signature is checked before the store is**, which is what stops a client sending a
+    // million guesses at an id and making the server look every one of them up.
+    val store = counted(memoryStore())
+    val app = made(Secret, { store: store })
+    val cookie = await cookieFrom(app)
+
+    assertEq(store.seen.gets, 0)
+
+    val bent = replace(cookie, payloadOf(cookie).i, repeat("0", len(payloadOf(cookie).i)))
+
+    assert(bent != cookie)
+    assertEq(doc(await app.handle(request("GET", "/me", { cookies: { session: bent } }))).who, null)
+    assertEq(store.seen.gets, 0)
+
+    // And the control: the cookie it came from is read, and the store is asked exactly once.
+    assertEq(doc(await app.handle(request("GET", "/me", { cookies: { session: cookie } }))).who, "ada")
+    assertEq(store.seen.gets, 1)
+
+@test
+async A_WELL_SIGNED_ID_THE_STORE_DOES_NOT_HAVE_IS_NOBODY()
+    // A server restarted with a memory store, or an entry that expired: the cookie is perfect and
+    // there is nothing behind it.
+    val app = made(Secret, { store: memoryStore() })
+    val cookie = await cookieFrom(app)
+    val elsewhere = made(Secret, { store: memoryStore() })
+
+    assertEq(doc(await elsewhere.handle(
+        request("GET", "/me", { cookies: { session: cookie } }))).who, null)
+
+@test
+async A_STORED_SESSION_PAST_ITS_TTL_IS_NOBODY()
+    // **The store's own expiry, on the clock a test can move.** The cookie here has not expired --
+    // that half is pinned above, and this is the entry going rather than the cookie.
+    val clock = { at: 1000 }
+
+    reading() -> integer = clock.at
+
+    val store = memoryStore({ now: reading })
+    val app = made(Secret, { store: store, maxAge: 60 })
+    val cookie = await cookieFrom(app)
+
+    assertEq(doc(await app.handle(request("GET", "/me", { cookies: { session: cookie } }))).who, "ada")
+
+    clock.at = 1000 + 60 * 1000
+
+    assertEq(doc(await app.handle(request("GET", "/me", { cookies: { session: cookie } }))).who, null)
+
+@test
+async A_REQUEST_THAT_ONLY_READS_A_STORED_SESSION_WRITES_NEITHER_A_COOKIE_NOR_AN_ENTRY()
+    val store = memoryStore()
+    val app = made(Secret, { store: store })
+
+    assertEq(len(cookies(await app.handle(request("GET", "/me")))), 0)
+    assertEq(store.size(), 0)
+
+@test
+async THE_TWO_MODES_STAND_SIDE_BY_SIDE_AND_NEITHER_READS_THE_OTHER()
+    // **One secret, one cookie name, two arrangements.** A cookie from one is well signed to the
+    // other and is still nobody, because what the payload carries means a different thing in each --
+    // which is what makes moving a program from one to the other a change of one option and a
+    // logging-out of everybody, and not a security hole in either.
+    val kept = made(Secret, { store: memoryStore() })
+    val plain = made(Secret)
+
+    val stored = await cookieFrom(kept)
+    val signed = await cookieFrom(plain)
+
+    assertEq(doc(await kept.handle(request("GET", "/me", { cookies: { session: stored } }))).who, "ada")
+    assertEq(doc(await plain.handle(request("GET", "/me", { cookies: { session: signed } }))).who, "ada")
+
+    assertEq(doc(await kept.handle(request("GET", "/me", { cookies: { session: signed } }))).who, null)
+    assertEq(doc(await plain.handle(request("GET", "/me", { cookies: { session: stored } }))).who, null)
+
+@test
+async A_STORE_IS_THREE_FUNCTIONS_AND_ANYTHING_ANSWERING_THEM_IS_ONE()
+    // **The interface is what this asserts**: no registration, no base class, nothing of this
+    // package's in it. A store over a database is this with `await` in the middle -- and these are
+    // deliberately NOT `async`, which is the other half of the claim: the guard awaits all three and
+    // `await` of a plain value answers it, so the promise in the interface is what a store MAY answer
+    // and not what it must.
+    val kept = { rows: {} }
+
+    get(id: string) = if has(kept.rows, id) then kept.rows[id] else null
+
+    set(id: string, value, ttl = null)
+        kept.rows[id] = value
+
+        null
+
+    delete(id: string)
+        if has(kept.rows, id) then kept.rows[id] = null
+
+        null
+
+    val app = made(Secret, { store: { get: get, set: set, delete: delete } })
+    val cookie = await cookieFrom(app)
+
+    assertEq(doc(await app.handle(request("GET", "/me", { cookies: { session: cookie } }))).who, "ada")
+
+@test
+async A_STORE_THAT_FAULTS_IS_A_500_AND_NOT_A_QUIET_LOGGING_OUT()
+    // **A database that is down is not a client who is nobody.** A guard that caught this and handed
+    // the handler `null` would log every user out on a blip and answer `200` while doing it, which
+    // is the failure a program can neither see nor recover from. So it faults, and a fault is a 500
+    // -- `api({ onFault: … })` being how a test watches one without ending the run.
+    var caught = null
+
+    noted(e)
+        caught = e.message
+
+    async falling(id: string)
+        throw "the session store is not there"
+
+    async setting(id: string, value, ttl = null) = null
+    async deleting(id: string) = null
+
+    val app = api({ onFault: noted })
+    val store = { get: falling, set: setting, delete: deleting }
+
+    app.get("/me", session(Secret, { store: store }, (req) -> json({ who: req.session.value })))
+
+    // A cookie the guard will actually look up: it has to get past the signature to reach the store.
+    val cookie = await cookieFrom(made(Secret, { store: memoryStore() }))
+    val r = await app.handle(request("GET", "/me", { cookies: { session: cookie } }))
+
+    assertEq(status(r), 500)
+    assertEq(caught, "the session store is not there")
+
+@test
+async A_COOKIE_PAST_ITS_maxAge_IS_NOBODY_AND_THE_STORE_IS_NOT_ASKED()
+    // **The cookie's own expiry is read before the store is**, which is what stops an expired session
+    // costing a lookup -- and what stops a store that has forgotten to expire an entry resurrecting
+    // one the cookie says is over.
+    val store = counted(memoryStore())
+    val app = made(Secret, { store: store, maxAge: 0 - 1 })
+    val cookie = await cookieFrom(app)
+
+    assertEq(store.seen.gets, 0)
+    assertEq(doc(await app.handle(request("GET", "/me", { cookies: { session: cookie } }))).who, null)
+    assertEq(store.seen.gets, 0)
+
+@test
+async A_STORED_SESSION_AND_A_CSRF_TOKEN_IN_ONE_RESPONSE_ARE_STILL_TWO_COOKIES()
+    // The neighbouring guard, over the mode that awaits: the session cookie is now written after two
+    // store calls, and `withHeaders` still has to keep both `Set-Cookie` lines.
+    val app = api()
+
+    app.get("/in", csrf({}, session(Secret, { store: memoryStore() }, greeter)))
+
+    val two = cookies(await app.handle(request("GET", "/in")))
+
+    assertEq(len(two), 2)
+    assert(contains(two[0], "session=") || contains(two[1], "session="))
+    assert(contains(two[0], "csrf=") || contains(two[1], "csrf="))
+
+@test
+async A_STORED_SESSION_COOKIE_CARRIES_THE_SAME_ATTRIBUTES_AS_ANY_OTHER()
+    // **`options` is one object and `store` is this guard's own**, so it has to be kept off the
+    // cookie by name -- a member `setCookie` has never heard of going straight through is otherwise
+    // exactly what the pass-through rule promises.
+    val line = cookies(await made(Secret, { store: memoryStore(), maxAge: 60 }).handle(
+        request("POST", "/in", { body: "\"ada\"" })))[0]
+
+    assert(contains(line, "HttpOnly"))
+    assert(contains(line, "SameSite=Lax"))
+    assert(contains(line, "Path=/"))
+    assert(contains(line, "Max-Age=60"))
+    assert(!contains(line, "store"))

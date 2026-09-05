@@ -79,14 +79,15 @@ async A_MISSING_NOTE_IS_A_404()
 | `bearer(verify, handler)` | the token out of `Authorization`, `req with { user }`; a `401` problem with `WWW-Authenticate` otherwise |
 | `cors(options, handler)` | the headers a browser needs, and a preflight answered without the handler running |
 | `logger(sink, handler)` | `sink({ method, path, status, ms })` once the answer is known |
-| `session(secret, options, handler)` | a signed cookie carrying the session itself, on `req.session` |
+| `session(secret, options, handler)` | a signed cookie carrying the session itself — or, with a `store`, a signed id into one — on `req.session` |
 | `csrf(options, handler)` | the double-submit token, and a `403` problem without it |
 | `requestId(options, handler)` | one name for this request, on `req.id` and on the answer |
 | `timeout(ms, options, handler)` | a `503` problem where the handler is taking too long |
 | `rateLimit(options, handler)` | a fixed window per key, and `429` with a `Retry-After` over it |
 | `multipart(options, handler)` | a `multipart/form-data` body as `req.form` |
 
-`hub()` and `sse(source, options)` are not guards but belong beside them — see **Events** below.
+`hub(options)`, `sse(source, options)` and `lastEventId(req)` are not guards but belong beside them —
+see **Events** below.
 
 **`logger`'s sink is a function of a record, which is exactly what
 [logger](https://github.com/slate-language/logger) takes**, so the two fit with nothing between
@@ -282,8 +283,10 @@ watches them itself.
 
 ## Sessions
 
-**A session is the data, signed, and not an identifier into a store.** The value travels in the
-cookie, an HMAC over it says nobody changed it, and the server holds nothing at all.
+**With no store the session IS the data, signed.** The value travels in the cookie, an HMAC over it
+says nobody changed it, and the server holds nothing at all — no backing thing to run and no I/O to
+read one. **With a store the cookie carries only a signed id**, which is what buys revocation and a
+session bigger than a cookie; it is the same guard and one more option, and it is below.
 
 ```slate
 import { api, session, csrf, json } from sluice
@@ -299,24 +302,83 @@ logIn(req)
     json({ ok: true })
 ```
 
-**`req.session` is `{ value, set }`.** `value` is what the cookie said, or `null` where there was no
+**`req.session` is `{ value, set, destroy }`.** `value` is what the cookie said, or `null` where there was no
 cookie, where it had been tampered with, or where it had expired — which are one thing to a handler:
 there is nobody logged in. Telling them apart would hand a client the difference between "no cookie"
 and "a bad signature", which is a thing to know only if you are forging one.
 
 **The cookie is written only where `set` was called**, so an ordinary request that reads a session
-and answers carries no `Set-Cookie` at all. `set(null)` clears it.
+and answers carries no `Set-Cookie` at all. `set(null)` clears it, and `destroy()` is that with a
+name.
 
 **What it costs is written down rather than discovered.** A cookie is about 4 KB, so a session is a
-handful of fields and not a shopping basket — and **there is no revocation**: a signed cookie is good
-until it expires, so `maxAge` is the only way to end one early and a password change does not log
-anybody out. Where either matters the answer is a store, and `session(secret, { store })` is the
-shape that would take without changing anything written against this.
+handful of fields and not a shopping basket — and with no store **there is no revocation**: a signed
+cookie is good until it expires, so `maxAge` is the only way to end one early and a password change
+does not log anybody out. Both of those are what a store buys.
 
 **The defaults are the safe ones and every one is overridable** — `httpOnly`, `sameSite: "Lax"`,
 `path: "/"`, and `secure` where the request arrived over https, which follows `x-forwarded-proto`
 rather than being on always, or a session would not work over `http://localhost`. `options` also
-takes `name` (`"session"`), `maxAge` in seconds, and anything else `slate:http`'s `setCookie` takes.
+takes `name` (`"session"`), `store`, `maxAge` in seconds, and anything else `slate:http`'s
+`setCookie` takes.
+
+### A session in a store
+
+**With a store the cookie carries only a signed, opaque id and the value lives on the server**, which
+is what buys revocation and a session bigger than a cookie:
+
+```slate
+import { api, session, json, memoryStore } from sluice
+
+val sessions = memoryStore()
+
+app.post("/login", session(Secret, { store: sessions, maxAge: 86400 }, (req) -> logIn(req)))
+app.post("/logout", session(Secret, { store: sessions }, (req) -> loggedOut(req)))
+
+loggedOut(req)
+    req.session.destroy()
+
+    json({ ok: true })
+```
+
+**Nothing written against `req.session` changes.** It is the same guard, the same cookie and the same
+`{ value, set, destroy }` — a program that outgrows a signed cookie adds one option.
+
+**A store is three functions and a plain object**, so one over redis, a database or a file is
+something a program writes in a dozen lines and this package knows nothing about:
+
+```slate
+{ get: (id) -> value or null, set: (id, value, ttl) -> …, delete: (id) -> … }
+```
+
+Each may answer a promise, which is what lets a store be a database — the guard awaits all three, and
+`await` of a plain value answers it, so a store whose functions are ordinary works too. `ttl` is in
+**milliseconds**, or `null`, and it is what `maxAge` becomes. `get` answers `null` for an id that was
+never there, one that expired and one that was revoked, which are one thing to a handler: there is
+nobody logged in.
+
+**`memoryStore(options)` is the reference implementation**, and it is what a single server, a
+development machine and a test suite want; a fleet wants redis or a table. `options` takes `ttl`, a
+default lifetime for an entry set without one, and `now`, a clock answering milliseconds since the
+epoch — which is what makes expiry testable without a sleep in a test.
+
+**`destroy()` revokes rather than merely forgetting**: the entry is deleted from the store and the
+cookie is cleared, so a logged-out session is gone from the server too. Revoking somebody else's is
+`store.delete(id)`, which is the thing a signed cookie cannot do at all.
+
+**A session that is written is written under a new id, and the old id is deleted.** That closes
+session fixation — an id planted in somebody's browser before they log in is not the id they are
+logged in under — and it costs one delete beside the set. Only `set` and `destroy` write; a request
+that reads a session touches the store once.
+
+**The two modes cannot read each other's cookies.** The payload names what it carries, so a cookie
+from a store-mode server is nobody to a signed-cookie one and the other way about, however well
+signed: moving a program from one to the other logs everybody out, and does not hand a handler
+somebody's opaque id as their session.
+
+**A store that faults answers `500`.** A database that is down is not a client who is nobody, and a
+guard that quietly handed the handler `null` would log every user out on a blip while answering
+`200`.
 
 ## CSRF
 
@@ -379,9 +441,44 @@ writer stops pulling from a source when a connection ends and does not tell the 
 subscriber nobody closes stays on the topic for the life of the program. `feed.count(topic)` is how
 you see that, and how the suite proves it.
 
-**There is no `Last-Event-ID` replay.** A browser reconnects and misses what happened while it was
-away, which is what most feeds want; doing it properly means the hub keeps a ring buffer per topic
-and ids get assigned, which is a second design.
+### Replay, for a client that reconnects
+
+**A hub asked for it keeps the last N events of every topic**, and a client that reconnects saying
+where it left off is handed what it missed before anything live:
+
+```slate
+import { api, hub, sse, lastEventId } from sluice
+
+val feed = hub({ replay: 64 })
+
+app.get("/events", (req) -> sse(feed.subscribe("notes", { lastEventId: lastEventId(req) })))
+```
+
+**`replay` is `0` by default and `0` means off**, which is what most feeds want — a browser
+reconnects, asks for the current state and carries on. A hub that remembers nothing also sends no
+ids, because an id is a promise to be able to replay from it.
+
+**With `replay` on, every event carries one.** An object published to a topic is given an `id`
+member and anything else is wrapped as its `data`, which is `slate:http`'s own shape for a piece of
+an event stream — so `publish("notes", "hello")` goes out as `id: 1` and `data: hello`, and
+`publish("notes", { event: "made", data: { id: 7 } })` keeps its event name and gains the id. **The
+ids are the topic's**, counted from 1: a client reconnects to the stream it was reading, and an id
+from another topic would place it somewhere arbitrary in this one.
+
+**`lastEventId(req)` reads the request and `subscribe` takes the id**, which is what keeps the hub
+one-way: a hub knows about topics and not about requests, and `sse` takes a source and not a
+request. It reads the `Last-Event-ID` header a browser sends on its own, and the `lastEventId` query
+parameter for a client that cannot put a header on an `EventSource`.
+
+**An id older than the buffer is handed everything still held, and the client is told nothing.**
+That is what a browser expects: `EventSource` has no way of being told it missed something and no
+way of asking again, so a hole arrives as a gap in the ids — a client that must not have one checks
+them, and one that only wants the current state carries on. **An id this hub did not write replays
+nothing and goes live**, a position that cannot be read being no position at all.
+
+**The replay goes through the same bounded queue the live events go through**, so a backlog longer
+than `bound` drops its oldest and `source.dropped()` counts them, exactly as a burst would. One rule
+about falling behind rather than two.
 
 ## The failure type is passed by its own name
 
