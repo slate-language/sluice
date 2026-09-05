@@ -267,7 +267,31 @@ async A_FILE_accept_REFUSES_IS_A_415_NAMING_IT()
     assertEq(doc(r).detail, "this endpoint does not take this upload")
     assertEq(doc(r).field, "u")
     assertEq(doc(r).filename, "notes.txt")
-    assertEq(doc(r).type, "image/png")
+    assertEq(doc(r).mediaType, "image/png")
+
+@test
+async THE_REFUSED_FILES_MEDIA_TYPE_IS_NOT_THE_DOCUMENTS_OWN_type()
+    // **RFC 9457's `type` is a URI naming the KIND OF PROBLEM**, and `about:blank` where there is
+    // none. The media type the client claimed for the part is an extension member, so it goes under
+    // a name of its own -- this said `"type": "image/png"`, which is not a problem type, is not a
+    // URI, and replaced the one member of the document that says what went wrong.
+    //
+    // **The whole document is asserted rather than a member of it**, because what went wrong here
+    // was a member that should not have been there at all: an assertion naming only the members it
+    // expects cannot see one it did not expect.
+    png(f) -> boolean = f.bytes[0] == 0x89 && f.bytes[1] == 0x50
+
+    val app = made({ accept: png })
+    val r = await app.handle(sent(posted([file("u", "notes.txt", "image/png", "not a png at all")])))
+
+    assertEq(doc(r), { type: "about:blank",
+                       title: "Unsupported Media Type",
+                       status: 415,
+                       detail: "this endpoint does not take this upload",
+                       instance: "/notes",
+                       field: "u",
+                       filename: "notes.txt",
+                       mediaType: "image/png" })
 
 @test
 async A_FILE_accept_TAKES_REACHES_THE_HANDLER_AND_FIELDS_ARE_NOT_ASKED_ABOUT()

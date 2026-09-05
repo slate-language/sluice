@@ -113,11 +113,20 @@ formed(options, h)
         // one: the upload is a perfectly good upload and simply not what this endpoint accepts.
         // **The whole body is parsed before this is asked**, the predicate being given the bytes so
         // that it can look at them rather than at what the client claimed.
+        //
+        // **THE FILE'S MEDIA TYPE IS `mediaType` AND NOT `type`, BECAUSE `type` IS THE DOCUMENT'S
+        // OWN.** RFC 9457's `type` is a URI naming the KIND OF PROBLEM -- `about:blank` where there
+        // is none -- so an extension member of that name does not sit beside it, it REPLACES it, and
+        // a refusal of a `.png` went out saying `"type": "image/png"`. Anything reading the document
+        // by the specification then has a problem type of `image/png`, which is not a URI it can
+        // look up and not what this refusal is about. The file's own members keep the names the file
+        // has them under everywhere else -- `field` and `filename` -- and only the one that
+        // collides is renamed.
         if refused != null
             return problemResponse(415, "Unsupported Media Type",
                 "this endpoint does not take this upload",
                 { instance: req.path, field: refused.field, filename: refused.filename,
-                  type: refused.type })
+                  mediaType: refused.type })
 
         await h(req with { form: parsed.value })
 

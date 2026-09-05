@@ -274,6 +274,16 @@ predicate is given the bytes and can look at them.
 carrying the reason it did not, and `413` over `maxBytes` — counted in **bytes**, a limit being about
 what the socket carried. The default is a megabyte, which is what `slate:http` reads whole.
 
+A file `accept` turned down names the part it turned down, in a document whose own `type` is
+`about:blank` — the media type the client claimed is `mediaType`, RFC 9457 having already given
+`type` to the kind of problem:
+
+```json
+{ "type": "about:blank", "title": "Unsupported Media Type", "status": 415,
+  "detail": "this endpoint does not take this upload", "instance": "/avatars",
+  "field": "photo", "filename": "innocent.png", "mediaType": "image/png" }
+```
+
 **A LARGE UPLOAD STILL WANTS `serveStream`.** `serve` holds the entire body in memory before a
 handler sees any of it, and finding the delimiters is a scan of every byte of it, so `maxBytes` is
 where that stops. `slate:http` parses no multipart body and says the parsing is the program's; this is
@@ -453,6 +463,20 @@ problem. The comparison is `slate:crypto`'s `timingSafeEqual`. `options` takes `
 
 **This is the one cookie deliberately not `HttpOnly`**, and the whole double-submit argument rests on
 it: a page has to be able to read the token to send it back.
+
+## Upgrading from 0.4.0
+
+**The media type in `multipart`'s `415` moved from `type` to `mediaType`, and that is a fix rather
+than a rename.** RFC 9457 gives `type` to the *problem's* type — a URI naming the kind of failure,
+`about:blank` where there is none — and an extension member is merged at the top level of the same
+document, so the file's media type under that name did not sit beside the document's own `type`, it
+replaced it. A refusal came back saying `"type": "image/png"`, which reads to anything following the
+specification as a problem type of `image/png`: not a URI, and not what the refusal was about.
+
+**A client reading `doc.type` to find out what was refused reads `doc.mediaType`.** `field`,
+`filename`, `status`, `title` and `detail` are all unchanged, and `type` now says `about:blank` as it
+does for every other refusal this package makes. Nothing else in the package moved and no behaviour
+but that member's name changed.
 
 ## Upgrading from 0.3.0
 
