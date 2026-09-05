@@ -1,6 +1,6 @@
 {
     name: "sluice",
-    version: "0.1.0",
+    version: "0.2.0",
 
     // The whole package is one door. `route.sl`, `problem.sl`, `guards.sl` and `testing.sl` are
     // reached from here and are deliberately not listed under `modules` -- what a consumer imports
