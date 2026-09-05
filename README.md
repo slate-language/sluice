@@ -79,7 +79,7 @@ async A_MISSING_NOTE_IS_A_404()
 | `bearer(verify, handler)` | the token out of `Authorization`, `req with { user }`; a `401` problem with `WWW-Authenticate` otherwise |
 | `cors(options, handler)` | the headers a browser needs, and a preflight answered without the handler running |
 | `logger(sink, handler)` | `sink({ method, path, status, ms })` once the answer is known |
-| `session(secret, options, handler)` | a signed cookie carrying the session itself, on `req.session` |
+| `session(secret, options, handler)` | a signed cookie carrying the session itself — or, with a `store`, a signed id into one — on `req.session` |
 | `csrf(options, handler)` | the double-submit token, and a `403` problem without it |
 
 `hub(options)`, `sse(source, options)` and `lastEventId(req)` are not guards but belong beside them —
@@ -121,8 +121,10 @@ what a token is.
 
 ## Sessions
 
-**A session is the data, signed, and not an identifier into a store.** The value travels in the
-cookie, an HMAC over it says nobody changed it, and the server holds nothing at all.
+**With no store the session IS the data, signed.** The value travels in the cookie, an HMAC over it
+says nobody changed it, and the server holds nothing at all — no backing thing to run and no I/O to
+read one. **With a store the cookie carries only a signed id**, which is what buys revocation and a
+session bigger than a cookie; it is the same guard and one more option, and it is below.
 
 ```slate
 import { api, session, csrf, json } from sluice
@@ -138,24 +140,83 @@ logIn(req)
     json({ ok: true })
 ```
 
-**`req.session` is `{ value, set }`.** `value` is what the cookie said, or `null` where there was no
+**`req.session` is `{ value, set, destroy }`.** `value` is what the cookie said, or `null` where there was no
 cookie, where it had been tampered with, or where it had expired — which are one thing to a handler:
 there is nobody logged in. Telling them apart would hand a client the difference between "no cookie"
 and "a bad signature", which is a thing to know only if you are forging one.
 
 **The cookie is written only where `set` was called**, so an ordinary request that reads a session
-and answers carries no `Set-Cookie` at all. `set(null)` clears it.
+and answers carries no `Set-Cookie` at all. `set(null)` clears it, and `destroy()` is that with a
+name.
 
 **What it costs is written down rather than discovered.** A cookie is about 4 KB, so a session is a
-handful of fields and not a shopping basket — and **there is no revocation**: a signed cookie is good
-until it expires, so `maxAge` is the only way to end one early and a password change does not log
-anybody out. Where either matters the answer is a store, and `session(secret, { store })` is the
-shape that would take without changing anything written against this.
+handful of fields and not a shopping basket — and with no store **there is no revocation**: a signed
+cookie is good until it expires, so `maxAge` is the only way to end one early and a password change
+does not log anybody out. Both of those are what a store buys.
 
 **The defaults are the safe ones and every one is overridable** — `httpOnly`, `sameSite: "Lax"`,
 `path: "/"`, and `secure` where the request arrived over https, which follows `x-forwarded-proto`
 rather than being on always, or a session would not work over `http://localhost`. `options` also
-takes `name` (`"session"`), `maxAge` in seconds, and anything else `slate:http`'s `setCookie` takes.
+takes `name` (`"session"`), `store`, `maxAge` in seconds, and anything else `slate:http`'s
+`setCookie` takes.
+
+### A session in a store
+
+**With a store the cookie carries only a signed, opaque id and the value lives on the server**, which
+is what buys revocation and a session bigger than a cookie:
+
+```slate
+import { api, session, json, memoryStore } from sluice
+
+val sessions = memoryStore()
+
+app.post("/login", session(Secret, { store: sessions, maxAge: 86400 }, (req) -> logIn(req)))
+app.post("/logout", session(Secret, { store: sessions }, (req) -> loggedOut(req)))
+
+loggedOut(req)
+    req.session.destroy()
+
+    json({ ok: true })
+```
+
+**Nothing written against `req.session` changes.** It is the same guard, the same cookie and the same
+`{ value, set, destroy }` — a program that outgrows a signed cookie adds one option.
+
+**A store is three functions and a plain object**, so one over redis, a database or a file is
+something a program writes in a dozen lines and this package knows nothing about:
+
+```slate
+{ get: (id) -> value or null, set: (id, value, ttl) -> …, delete: (id) -> … }
+```
+
+Each may answer a promise, which is what lets a store be a database — the guard awaits all three, and
+`await` of a plain value answers it, so a store whose functions are ordinary works too. `ttl` is in
+**milliseconds**, or `null`, and it is what `maxAge` becomes. `get` answers `null` for an id that was
+never there, one that expired and one that was revoked, which are one thing to a handler: there is
+nobody logged in.
+
+**`memoryStore(options)` is the reference implementation**, and it is what a single server, a
+development machine and a test suite want; a fleet wants redis or a table. `options` takes `ttl`, a
+default lifetime for an entry set without one, and `now`, a clock answering milliseconds since the
+epoch — which is what makes expiry testable without a sleep in a test.
+
+**`destroy()` revokes rather than merely forgetting**: the entry is deleted from the store and the
+cookie is cleared, so a logged-out session is gone from the server too. Revoking somebody else's is
+`store.delete(id)`, which is the thing a signed cookie cannot do at all.
+
+**A session that is written is written under a new id, and the old id is deleted.** That closes
+session fixation — an id planted in somebody's browser before they log in is not the id they are
+logged in under — and it costs one delete beside the set. Only `set` and `destroy` write; a request
+that reads a session touches the store once.
+
+**The two modes cannot read each other's cookies.** The payload names what it carries, so a cookie
+from a store-mode server is nobody to a signed-cookie one and the other way about, however well
+signed: moving a program from one to the other logs everybody out, and does not hand a handler
+somebody's opaque id as their session.
+
+**A store that faults answers `500`.** A database that is down is not a client who is nobody, and a
+guard that quietly handed the handler `null` would log every user out on a blip while answering
+`200`.
 
 ## CSRF
 

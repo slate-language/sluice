@@ -33,6 +33,7 @@ import { makeApi, stack as makeStack, lazy } from "./api.sl"
 import { problemResponse, jsonResponse, asResponse } from "./response.sl"
 import { bodyGuard, queryGuard, bearerGuard, corsGuard, loggerGuard, guard, labelOf } from "./guards.sl"
 import { sessionGuard, csrfGuard } from "./sessions.sl"
+import { makeMemoryStore } from "./store.sl"
 import { makeHub, lastSeenId } from "./events.sl"
 import { request as makeRequest } from "./testing.sl"
 
@@ -81,17 +82,35 @@ export cors(options: object, handler = null) = applied(corsGuard(options), handl
 // `logger(sink, handler)` -- `sink({ method, path, status, ms })` once the answer is known.
 export logger(sink: function, handler = null) = applied(loggerGuard(sink), handler)
 
-// `session(secret, options, handler)` -- a signed cookie carrying the session itself.
+// `session(secret, options, handler)` -- a signed cookie carrying the session, or a signed id into a
+// store.
 //
-// A handler is given `req.session`, which is `{ value, set }`: `value` is what the cookie said, or
-// `null` where there was no cookie, where it had been tampered with, or where it had expired; `set`
-// writes a new one, and `set(null)` clears it. **The cookie is written only where `set` was called.**
+// A handler is given `req.session`, which is `{ value, set, destroy }`: `value` is what the session
+// said, or `null` where there was none, where the cookie had been tampered with, where it had
+// expired, or where a store no longer has it; `set` writes a new one, `set(null)` clears it, and
+// `destroy()` is that with a name. **The cookie is written only where `set` or `destroy` was
+// called.**
 //
-// `options` takes `name` (`"session"`), `maxAge` in seconds, and anything `setCookie` takes -- the
-// defaults being `httpOnly`, `sameSite: "Lax"`, `path: "/"`, and `secure` where the request arrived
-// over https.
+// **`store` is what buys revocation and a session bigger than a cookie.** With one, the cookie
+// carries only a signed opaque id and the value lives in the store; a session that is written is
+// written under a new id, and `destroy()` deletes the entry rather than merely forgetting it.
+//
+// `options` takes `name` (`"session"`), `store`, `maxAge` in seconds, and anything `setCookie` takes
+// -- the defaults being `httpOnly`, `sameSite: "Lax"`, `path: "/"`, and `secure` where the request
+// arrived over https.
 export session(secret: string, options: object = {}, handler = null) =
     applied(sessionGuard(secret, options), handler)
+
+// `memoryStore(options)` -- somewhere for a session to live, in this process's memory.
+//
+// **A store is three functions**: `get(id)`, `set(id, value, ttl)` and `delete(id)`, each of which
+// may answer a promise, so a store over redis or a database is a plain object a program writes
+// itself and this one is the reference. `ttl` is in milliseconds.
+//
+// `options` takes `ttl`, a default lifetime for an entry set without one, and `now`, a clock
+// answering milliseconds since the epoch -- which is what makes expiry testable without a sleep.
+// The store also answers `size()`, which is not part of the interface a store has to meet.
+export memoryStore(options: object = {}) -> object = makeMemoryStore(options)
 
 // `csrf(options, handler)` -- the double-submit cookie.
 //
