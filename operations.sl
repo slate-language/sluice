@@ -221,11 +221,20 @@ raise(e)
 // filled -- which is the one number a well-behaved client wants and the reason a fixed window is
 // pleasant to be on the wrong side of.
 //
+// **THE KEY IS WHO CONNECTED, AND A HEADER IS NOT AN IDENTITY UNTIL SOMETHING OVERWRITES IT.**
+// `req.address` is the peer of this request's socket, which is slate 0.0.30's and is the one thing
+// about a client the client cannot choose. `x-forwarded-for` and `x-real-ip` are text anybody may
+// write, so a server exposed directly that read them would be a rate limit with a bypass header --
+// one line in `curl` and every request is a new client. They are therefore read only where
+// `trustProxy` says a proxy in front of this server writes them, and there they are read FIRST,
+// because there the address is the proxy's and every client shares it.
+//
 // | option | |
 // |---|---|
 // | `limit` | how many requests one key may make in a window. `60` |
 // | `window` | how long a window is, in milliseconds. `60000` |
 // | `key` | a function of the request answering the name to count under |
+// | `trustProxy` | whether `x-forwarded-for` names the client. `false` |
 // | `now` | a function answering milliseconds; the monotonic clock by default |
 // | `store` | where counts are kept. `rateStore()` |
 export rateLimitGuard(options: object) -> object =
@@ -234,7 +243,8 @@ export rateLimitGuard(options: object) -> object =
 limited(options, h)
     val limit = options.limit ?? 60
     val window = options.window ?? 60000
-    val key = options.key ?? clientKey
+    val proxied = options.trustProxy ?? false
+    val key = options.key ?? ((req) -> clientKey(req, proxied))
     val clock = options.now ?? elapsed
     val store = options.store ?? rateStore({ now: clock })
 
@@ -275,29 +285,51 @@ limited(options, h)
 
 // The key a request is counted under when the program did not say.
 //
-// **slate:http DOES NOT TELL A HANDLER WHO CONNECTED**, a `Request` being method, path, search,
-// headers, query, cookies, params, body, `keepAlive` and `upgrade` and nothing about the socket. So
-// the address this can reach is the one a proxy wrote down, and a server with no proxy in front of it
-// counts every direct client under one name -- which is a global limit rather than a per-client one,
-// and is said here rather than left to be found out.
+// **`req.address` IS THE DEFAULT AND A HEADER IS NOT**, which is the whole of this function's
+// argument. The address is the peer of the socket this request came in on -- slate 0.0.30 puts it on
+// the request, and `slate:http` normalises it, so an IPv4 client of a dual-stack server reads as
+// `127.0.0.1` and not as `::ffff:127.0.0.1` and two spellings of one client are not two buckets.
+// **It is the one fact about a client the client did not choose.**
 //
-// **`req.address` is read first so that this needs no change** on the day the server grows one.
+// **`x-forwarded-for` IS A CLIENT'S TEXT UNTIL A PROXY OVERWRITES IT.** Trusting it by default would
+// make every limiter here bypassable with a header, which is a limiter that stops only the clients
+// that were not trying -- so it is read only under `trustProxy`, where the operator has said
+// something in front of this server sets it. There it is read FIRST and the address second: behind a
+// proxy the address is the proxy's, and every client in the world shares it.
 //
-// **A forwarded header is a CLIENT'S TEXT wherever nothing overwrites it**, so a program exposed
-// directly should pass its own `key` rather than trust one -- a header anybody can set is a rate
-// limit anybody can step around.
-clientKey(req) -> string
-    if has(req, "address") then return string(req.address)
+// **The LEFTMOST entry is the client**, a proxy appending the peer it saw to whatever it was given.
+// That is also why the header is worth nothing untrusted: the left of the list is exactly the part
+// the client wrote.
+//
+// **`"unknown"` is what is left where there is no address and no trusted header**, and it is one
+// bucket for everybody -- a global limit rather than a per-client one. A server whose clients are
+// accounts or api keys wants its own `key`, which is the option every real deployment uses.
+//
+// **A header that is there and EMPTY is a header that is not there**, which is not fussiness: a proxy
+// that writes the name and nothing after it would otherwise put every client it forwards into one
+// bucket named by the empty string, and that bucket would be the whole internet.
+clientKey(req, trustProxy: boolean) -> string
+    if trustProxy
+        val forwarded = leftmost(headerOf(req, "x-forwarded-for"))
 
-    val forwarded = headerOf(req, "x-forwarded-for")
+        if forwarded != null then return forwarded
 
-    if forwarded != null then return trim(split(forwarded, ",")[0])
+        val real = leftmost(headerOf(req, "x-real-ip"))
 
-    val real = headerOf(req, "x-real-ip")
+        if real != null then return real
 
-    if real != null then return trim(real)
+    if has(req, "address") && req.address != null then return string(req.address)
 
     "unknown"
+
+// The leftmost entry of a comma-separated header that has anything in it, or `null`.
+leftmost(value) -> string | null
+    if value == null then return null
+
+    for one in split(value, ",")
+        if trim(one) != "" then return trim(one)
+
+    null
 
 // Milliseconds as whole seconds, rounded up, and never less than one. **A `Retry-After: 0` is a
 // client told to try again immediately**, which is the one answer a limiter must not give.
@@ -359,8 +391,10 @@ export rateStore(options: object = {}) -> object
 
     { hit: hit, size: size }
 
-// Everything not yet expired. **slate has no way to take a key out of an object**, so forgetting is
-// building the one that is left -- which is why it is done in a sweep rather than per key.
+// Everything not yet expired. **A SWEEP REBUILDS RATHER THAN CALLING `without` PER KEY**, and that is
+// a choice about bulk and not about the language any more -- slate 0.0.30 can take a key out of an
+// object, and doing it for each of a thousand expired buckets would be a thousand copies of the table
+// where one walk answers it.
 kept(held: object, at: integer) -> object
     var out = {}
 

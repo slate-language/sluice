@@ -7,43 +7,46 @@
 // value handed to `handle` cannot have. The rest of the hub's behaviour is in `tests/events.sl`
 // with no socket anywhere.
 //
-// **`slate:net` IS OWED ON THE JAVASCRIPT BACK END**, so under `slate test --js tests` this file
-// asks the host for a listener, is told there is none, and answers without asserting anything --
-// which is what `sockets()` below is. The names all import; it is calling one that says
-// *"`listen` is not in the JavaScript back end yet"*.
+// **`slate:net` IS OWED ON THE JAVASCRIPT BACK END**, so under `slate test --js tests` both tests
+// here `skip` -- slate 0.0.30's third verdict, said where a passing test's timing goes and counted on
+// the last line of the run. Until then a test left out on a host `return`ed, which is a PASS with
+// nothing asserted; the count was the same either way and nothing said which. The names all import;
+// it is calling one that says *"`listen` is not in the JavaScript back end yet"*.
 
 import { serve, close as closeServer } from slate:http
 import { listen, connect, send, onData, close as closeSocket, localPort } from slate:net
-import { stderr } from slate:process
 
 import { api, hub, sse } from "../sluice.sl"
 
-// Whether this host has sockets at all, asked by opening one and letting it go.
+// Why this host cannot run these, or `null` where it can, asked by opening a listener and letting it
+// go.
 //
 // **The question is asked of the HOST and not of a flag**, there being nothing to read: a name on
 // the JavaScript back end's owed list exists and faults when it is called, so calling it is the
 // only way to find out. Asked once, since the answer cannot change.
-val Host = { asked: false, has: false }
+val Host = { asked: false, why: null }
 
-sockets() -> boolean
-    if Host.asked then return Host.has
+lacking() -> string | null
+    if Host.asked then return Host.why
 
     Host.asked = true
 
     try
-        val probe = listen(0, (c) -> null)
-
-        closeSocket(probe)
-
-        Host.has = true
+        closeSocket(listen(0, (c) -> null))
     catch e
-        // **The note goes to `stderr` and not to `print`**, because the runner keeps what a passing
-        // test wrote and shows it only above a failure -- said with `print`, a skip is something
-        // nobody is ever told about.
-        stderr("--    tests/hangup.sl needs a real socket, and this host has none: " +
-            e.message + "\n")
+        Host.why = "this host has no listener, and a writer finding out is a real socket: " + e.message
 
-    Host.has
+    Host.why
+
+// **`skip` RAISES, which is why nothing follows this line where it fires.** A skip is the test's
+// whole verdict, exactly as `exit` is a script's, so a `catch` in anything the test calls cannot
+// swallow it and forgetting a `return` beside it cannot leave the test running.
+needsASocket()
+    val why = lacking()
+
+    if why != null then skip(why)
+
+    null
 
 // Everything the client has been sent so far.
 heard(seen: object, chunk)
@@ -76,7 +79,7 @@ async A_SUBSCRIBER_WHOSE_READER_HAS_GONE_IS_TAKEN_OFF_THE_TOPIC()
     // package changed; what changed is underneath it.
     //
     // **`count(topic)` is the only thing that can see any of it**, which is why it exists.
-    if !sockets() then return null
+    needsASocket()
 
     val app = api()
     val feed = hub()
@@ -123,7 +126,7 @@ async A_SUBSCRIBER_WHOSE_READER_IS_STILL_THERE_IS_LEFT_ALONE()
     // would make that test pass for a reason that has nothing to do with the reader going away. So
     // this is the same stream with the client kept, reading events as they come, and the count
     // stays where it was.
-    if !sockets() then return null
+    needsASocket()
 
     val app = api()
     val feed = hub()

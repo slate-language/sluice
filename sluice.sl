@@ -138,12 +138,15 @@ export rateStore(options: object = {}) -> object = makeStore(options)
 
 // `multipart(options, handler)` -- a `multipart/form-data` body as `req.form`, `{ fields, files }`.
 //
-// A file is `{ field, filename, type, content }`. `415` where the body is not multipart, `400` where
-// it will not parse, and `413` over `options.limit` (a megabyte by default).
+// A field is text and a file is `{ field, filename, type, bytes, text }` -- `bytes` exactly what
+// arrived, `text()` that decoded or `null` where it is not text. `415` where the body is not
+// multipart or `options.accept` refuses a file, `400` where it will not parse, and `413` over
+// `options.maxBytes` (a megabyte by default).
 //
-// **It reads TEXT uploads.** `serve` hands a body over as a string and one that is not UTF-8 becomes
-// the empty string on the way, so a program taking arbitrary bytes wants `serveStream` and its own
-// reader -- which is what `slate:http` says about multipart in the first place.
+// **It reads BINARY uploads as of 0.4.0**, over `req.bytes`: a `.png` used to arrive as nothing at
+// all, `serve` having had only the UTF-8 reading of a body to hand over. **A LARGE upload still wants
+// `serveStream`**, which is what `slate:http` says about multipart in the first place -- `serve`
+// holds the whole body before a handler sees any of it.
 export multipart(options: object = {}, handler = null) = applied(multipartGuard(options), handler)
 
 // `drain(server, options)` -- stop taking requests, let what is in hand finish, then close.

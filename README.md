@@ -71,6 +71,15 @@ async A_MISSING_NOTE_IS_A_404()
 `query` rendered into `search`, a non-string `body` encoded as JSON — and the value it answers `is`
 `slate:http`'s own `Request`.
 
+**`body` and `bytes` fill each other in, because `serve` puts both on a request**, and `address`
+defaults to `"127.0.0.1"` as a loopback client reads. A test that means to send something that is not
+text writes `bytes` and gets the empty `body` the server would have made of it:
+
+```slate
+request("POST", "/avatars", { headers: sending(boundary), bytes: png })
+request("GET", "/notes", { address: "203.0.113.7" })
+```
+
 ## The guards
 
 | | |
@@ -196,11 +205,27 @@ Where that matters, use a shorter window.
 **`store` is an option and its whole interface is `hit(bucket, ttl)` answering the count.** That is
 the shape a shared store can implement, and `rateStore()` is the one you get when you say nothing.
 
-**The default key is what a proxy said**, `x-forwarded-for`'s first hop then `x-real-ip` — because
-**`slate:http` does not tell a handler who connected**. A server with nothing in front of it therefore
-counts every direct client under one name, which is a global limit rather than a per-client one; and a
-server that *is* exposed directly should pass a `key` of its own, a header anybody can set being a
-rate limit anybody can step around.
+**The default key is `req.address` — who connected — and a forwarded header is not an identity.**
+The address is the peer of this request's socket, normalised by `slate:http` so that an IPv4 client of
+a dual-stack server is `127.0.0.1` and not `::ffff:127.0.0.1`, and it is the one fact about a client
+the client did not choose. `x-forwarded-for` and `x-real-ip` are **text anybody may write**: a limiter
+that read them by default would hand a fresh allowance to every request that made one up, which is a
+limit that stops only the clients who were not trying.
+
+```slate
+app.get("/notes", rateLimit({ trustProxy: true }, handler))
+```
+
+**`trustProxy` is where you say something in front of this server overwrites them**, and there they
+are read *first* — behind a proxy the address is the proxy's and every client in the world shares it.
+The leftmost entry of `x-forwarded-for` is taken, a proxy appending the peer it saw to whatever it was
+given; `x-real-ip` is the fallback, and the address is the fallback after that. Turn it on only where
+a proxy really is in front, and only where that proxy *replaces* the header rather than appending to
+one a client sent.
+
+Where the socket cannot say who connected, the key is `"unknown"` — a global limit rather than a
+per-client one. A deployment whose clients are accounts, tenants or api keys wants a `key` of its own,
+which is the option every real one uses.
 
 **Every answer carries `X-RateLimit-Limit`, `-Remaining` and `-Reset`.** `Reset` is seconds from now
 and not an epoch second — the clock a window is measured against is monotonic and names no point in
@@ -211,23 +236,48 @@ time, and a delta survives a client whose clock is wrong.
 **`multipart` parses a `multipart/form-data` body into `req.form`**, which is `{ fields, files }`.
 
 ```slate
-app.post("/notes", multipart({ limit: 65536 }, (req) -> save(req.form.files[0])))
+app.post("/notes", multipart({ maxBytes: 65536 }, (req) -> save(req.form.files[0])))
 ```
 
 `fields` is an object read by name, where a repeated name keeps the last — the rule `slate:http`
 already applies to a repeated name in a query string. `files` is an array, because two files may be
-sent under one name, and each is `{ field, filename, type, content }`. **`type` is what the client
-claimed** and is worth exactly that.
+sent under one name, and each is `{ field, filename, type, bytes, text }`. **`type` is what the
+client claimed** and is worth exactly that.
 
-`415` where the body is not multipart, `400` where it will not parse, carrying the reason it did not,
-and `413` over `limit` — counted in **bytes**, a limit being about what the socket carried.
+**A FIELD IS TEXT AND A FILE IS BYTES, AND NEITHER IS SOMETIMES THE OTHER.** A form field comes from
+a control a person typed into, so `fields` is name to string; a file is whatever was chosen from a
+disk, so `bytes` is exactly what arrived and `text()` answers it decoded or `null` where it is not
+text:
 
-**IT READS TEXT UPLOADS, AND THAT IS A LIMIT OF THE SERVER UNDER IT.** `serve` reads a body whole and
-hands it over as a **string**, and a body that is not UTF-8 becomes the *empty string* on the way — so
-a `.png` posted to a route behind this guard arrives as nothing at all. A program taking arbitrary
-bytes wants `serveStream` and a reader of its own, which is what `slate:http` says about multipart in
-the first place: it parses none, and the parsing is the program's. This is that parsing, for the
-uploads that are text — a form, a CSV, a `.json`, a `.md`.
+```slate
+for f in req.form.files
+    print(f.filename, len(f.bytes), f.text() ?? "(not text)")
+```
+
+**`text` is a function and `bytes` is never sometimes a string**, which is the decision `slate:http`
+made about a repeated query name read again: a member whose *type* depends on what a client sent is a
+program that works until somebody uploads a PNG. The decode is asked for rather than done to every
+upload.
+
+**`accept` is where an endpoint says what it will take**, given each file after the body is parsed:
+
+```slate
+png(f) = f.bytes[0] == 0x89 && f.bytes[1] == 0x50
+
+app.post("/avatars", multipart({ accept: png }, (req) -> store(req.form.files[0])))
+```
+
+It is a predicate and not a list of media types, because `type` is what the client *claimed* — a
+predicate is given the bytes and can look at them.
+
+`415` where the body is not multipart or `accept` refuses a file, `400` where it will not parse,
+carrying the reason it did not, and `413` over `maxBytes` — counted in **bytes**, a limit being about
+what the socket carried. The default is a megabyte, which is what `slate:http` reads whole.
+
+**A LARGE UPLOAD STILL WANTS `serveStream`.** `serve` holds the entire body in memory before a
+handler sees any of it, and finding the delimiters is a scan of every byte of it, so `maxBytes` is
+where that stops. `slate:http` parses no multipart body and says the parsing is the program's; this is
+that parsing, for the uploads a whole-body read is the right shape for.
 
 ## Health, and stopping
 
@@ -403,6 +453,36 @@ problem. The comparison is `slate:crypto`'s `timingSafeEqual`. `options` takes `
 
 **This is the one cookie deliberately not `HttpOnly`**, and the whole double-submit argument rests on
 it: a page has to be able to read the token to send it back.
+
+## Upgrading from 0.3.0
+
+**The floor is slate 0.0.30**, and it is two things on the request: `req.bytes`, which is what
+`multipart` now reads, and `req.address`, which is what `rateLimit` now keys on.
+
+**`multipart` takes binary parts, and a file's `content` is gone.** A file is
+`{ field, filename, type, bytes, text }` — `bytes` is what arrived and `text()` answers it decoded or
+`null`. A handler that read `f.content` reads `f.text()`, and one that was only ever going to see
+text will find that it still gets it. `fields` is unchanged, except that a field whose bytes are not
+text is now a `400` rather than an empty string.
+
+**`multipart`'s `limit` is now `maxBytes`.** The old name is not read; a route passing `limit` gets
+the default megabyte with no warning, so grep for it. It also now counts the bytes that *arrived*
+rather than the bytes of the text they decoded to — which is a hole shut as well as a rename, a binary
+body having measured `0` and passed every ceiling.
+
+**`multipart` no longer writes `req.raw`.** `req.bytes` is what it was for and the server puts it on
+every request. (`body`'s `raw` is untouched: that guard replaces `req.body` with the parsed value, so
+the text it took has nowhere else to be.)
+
+**`rateLimit` keys on `req.address` and ignores `x-forwarded-for` unless `trustProxy` is set.** A
+server behind nginx, a load balancer or a CDN wants `rateLimit({ trustProxy: true }, …)`; one exposed
+directly wants the new default, which is not bypassable with a header. A deployment that passed its
+own `key` is unaffected. See **Rate limiting** for why the old default was the wrong way round.
+
+**`memoryStore` deletes with `without`**, which is behaviour-for-behaviour what the mark-and-rebuild
+it replaces did. Nothing to change; it is noted because a delete is now linear in the sessions held
+rather than amortised constant, and a service with enough sessions for that to matter wanted redis
+long before this release.
 
 ## Upgrading from 0.2.0
 
@@ -613,15 +693,18 @@ slate examples/tasks/main.sl
 `check/` holds the two hand-run drivers — the exhaustiveness refusal above, and a defect stopping the
 program — and they are not under `tests/` because passing would mean ending the run.
 
-**It needs slate 0.0.29 or later.** Shape values with `test`/`mismatch`/`name` are what make a
+**It needs slate 0.0.30 or later.** Shape values with `test`/`mismatch`/`name` are what make a
 declaration the validator and `?` optional keys are what let a request body have one, both from
 0.0.7; 0.0.23 gave `slate:http` the `percentDecode` a path parameter is read with and the manifest
 the `devDependencies` section below; 0.0.24 made a `data` name one of those shape values, which is
 what `api.failures(Failure, …)` on this page is; 0.0.27 let `slate:http` take an array for a header
-that repeats, which is how a login writes two cookies. **0.0.29 is the floor now, and it is two
-things**: `slate:url`'s `base64urlEncode` and `base64urlDecode`, which every signature and session id
-on this page is written in, and a streamed response telling its source that its reader has gone,
-which is what stops an event stream leaking a subscriber per browser tab.
+that repeats, which is how a login writes two cookies; 0.0.29 gave `slate:url` the
+`base64urlEncode`/`base64urlDecode` every signature and session id on this page is written in, and a
+streamed response the ability to tell its source that its reader has gone, which is what stops an
+event stream leaking a subscriber per browser tab. **0.0.30 is the floor now, and it is two members
+of the request**: `req.bytes`, which is what lets `multipart` read an upload that is not text, and
+`req.address`, which is who `rateLimit` counts. `without` is in here too — `memoryStore` deletes with
+it — but that one is a simplification and not a floor.
 
 **[logger](https://github.com/slate-language/logger) 0.1.0 and
 [pg](https://github.com/slate-language/pg) 0.3.0 are DEV dependencies**, used by the examples and by

@@ -14,12 +14,19 @@ import { encodeComponent } from slate:http
 // |---|---|
 // | `headers` | an object; the names are lowercased, which is how they arrive over a socket |
 // | `body` | a string as it stands, anything else encoded as JSON |
+// | `bytes` | the body as bytes, where a test means to send something that is not text |
 // | `query` | an object, which also becomes `search` |
 // | `search` | the raw text after the `?`, where a test means to write it itself |
 // | `cookies` | an object |
+// | `address` | the IP that connected; `"127.0.0.1"` by default, as a loopback client reads |
 //
 // **`params` is `{}` here and is filled in by `handle`**, a route's `:name` being something only a
 // route knows about.
+//
+// **`body` AND `bytes` ARE BOTH THERE, BECAUSE `serve` PUTS BOTH THERE.** slate 0.0.30 gives a
+// request the text and the bytes of what arrived, and they are two readings of one body rather than
+// two bodies -- so writing one here fills the other, and a test that means to send bytes that are not
+// text writes `bytes` and gets the `""` that `serve` would have given `body`.
 export request(method: string, path: string, options: object = {}) -> object
     val given = if has(options, "headers") then options.headers else {}
     var headers = {}
@@ -40,14 +47,25 @@ export request(method: string, path: string, options: object = {}) -> object
                 query: query,
                 cookies: if has(options, "cookies") then options.cookies else {},
                 params: {},
+                address: if has(options, "address") then options.address else "127.0.0.1",
                 keepAlive: true,
                 upgrade: false }
 
+    if has(options, "bytes") then return req with { bytes: options.bytes, body: textOf(options.bytes) }
+
     if !has(options, "body") then return req
 
-    val body = options.body
+    val body = if options.body is string then options.body else toJSON(options.body)
 
-    if body is string then req with { body: body } else req with { body: toJSON(body) }
+    req with { body: body, bytes: toBytes(body) }
+
+// Bytes as the text `serve` would have made of them. **A body that is not UTF-8 is `""` and not a
+// fault**, which is exactly what the server does with one: `body` is the reading and `bytes` are what
+// arrived.
+textOf(bs: array) -> string
+    val read = fromBytes(bs)
+
+    if read.ok then read.value else ""
 
 // Every value of an object rendered as the text a query string would have held.
 asText(query: object) -> object

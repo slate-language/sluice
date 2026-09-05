@@ -113,15 +113,14 @@ async A_STORE_MAY_CARRY_A_DEFAULT_TTL_FOR_AN_ENTRY_SET_WITHOUT_ONE()
 
 @test
 async A_STORE_PUT_THROUGH_MANY_LOGINS_AND_LOGOUTS_STILL_ANSWERS()
-    // **SLATE HAS NO WAY TO REMOVE A KEY FROM AN OBJECT**, so an entry is marked dead and the table
-    // rebuilt once the dead outnumber the living.
+    // **A DELETE IS `without` AS OF slate 0.0.30**, where it used to mark an entry dead, count the
+    // dead ones and rebuild the table once they outnumbered the living -- five moving parts for a
+    // missing builtin, and this test is what said the arithmetic between them was right.
     //
-    // **THE REBUILD ITSELF IS NOT OBSERVABLE FROM OUT HERE AND THIS TEST DOES NOT PRETEND TO SEE
-    // IT** -- a store that never compacted would answer every assertion below exactly as this one
-    // does, and only its memory would say otherwise. What is pinned is that hundreds of turns of the
-    // thing a store actually does leave it answering correctly and counting right, which is where a
-    // compaction that dropped a living entry or lost count would show; the test under this one is
-    // the other half of that control.
+    // **IT IS KEPT, BECAUSE WHAT IT PINS IS THE STORE AND NOT THE SCHEME.** A delete that lost
+    // another entry, a `size` that drifted, an id written after two hundred of them that could not
+    // be read back: none of those is visible in a store that only ever holds one. Hundreds of turns
+    // of the thing a store actually does is where they show, whatever the delete is written as.
     val store = memoryStore()
 
     for i in 1..200
@@ -139,7 +138,7 @@ async A_STORE_PUT_THROUGH_MANY_LOGINS_AND_LOGOUTS_STILL_ANSWERS()
 
 @test
 async DELETING_ONE_OF_MANY_LEAVES_THE_REST_WHERE_THEY_WERE()
-    // The control for the rebuild above: a compaction that dropped a living entry would pass every
+    // The control for the two hundred above: a delete that took a neighbour with it would pass every
     // test that only ever holds one.
     val store = memoryStore()
 

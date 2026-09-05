@@ -146,26 +146,109 @@ async A_KEY_OF_THE_PROGRAMS_OWN_COUNTS_CLIENTS_APART()
     assertEq(status(await app.handle(request("GET", "/notes", ada))), 429)
     assertEq(status(await app.handle(request("GET", "/notes", bob))), 429)
 
-@test
-async THE_DEFAULT_KEY_IS_WHAT_A_PROXY_SAID()
-    // **slate:http does not tell a handler who connected**, so what the default can reach is the
-    // address a proxy wrote down -- and a server with nothing in front of it counts every direct
-    // client under one name, which is said in the README rather than discovered.
-    var at = 0
+// A limiter of one request a window, keying however it was told to.
+counting(clock, options: object) -> object
     val app = api()
+    var settings = { limit: 1, window: 1000, now: clock }
 
-    app.get("/notes", rateLimit({ limit: 1, window: 1000, now: () -> at }, (req) -> "the notes"))
+    for [k, v] in entries(options)
+        settings[k] = v
 
-    val one = { headers: { "X-Forwarded-For": "203.0.113.7, 70.41.3.18" } }
-    val two = { headers: { "X-Real-IP": "203.0.113.9" } }
+    app.get("/notes", rateLimit(settings, (req) -> "the notes"))
 
-    assertEq(status(await app.handle(request("GET", "/notes", one))), 200)
-    assertEq(status(await app.handle(request("GET", "/notes", two))), 200)
-    assertEq(status(await app.handle(request("GET", "/notes", one))), 429)
+    app
 
-    // Two clients with nothing in front of them are one bucket, which is the cost of the gap.
-    assertEq(status(await app.handle(request("GET", "/notes"))), 200)
-    assertEq(status(await app.handle(request("GET", "/notes"))), 429)
+@test
+async THE_DEFAULT_KEY_IS_WHO_CONNECTED()
+    // **`req.address` is the peer of the socket**, which slate 0.0.30 puts on the request, and it is
+    // the one fact about a client the client did not choose.
+    var at = 0
+    val app = counting(() -> at, {})
+
+    val ada = { address: "203.0.113.7" }
+    val bob = { address: "203.0.113.9" }
+
+    assertEq(status(await app.handle(request("GET", "/notes", ada))), 200)
+    assertEq(status(await app.handle(request("GET", "/notes", bob))), 200)
+    assertEq(status(await app.handle(request("GET", "/notes", ada))), 429)
+    assertEq(status(await app.handle(request("GET", "/notes", bob))), 429)
+
+@test
+async A_FORWARDED_HEADER_IS_NOT_AN_IDENTITY_UNTIL_trustProxy_SAYS_SO()
+    // **THE BYPASS THIS SHUTS, AND IT IS ONE LINE OF `curl`.** `x-forwarded-for` is text anybody may
+    // write, so a limiter that keyed on it by default would count a fresh client for every request
+    // that made one up -- a limit that stops only the clients that were not trying. Here the two
+    // requests are one client and the header buys nothing.
+    var at = 0
+    val app = counting(() -> at, {})
+
+    val ada = { address: "203.0.113.7" }
+    val forging = { address: "203.0.113.7", headers: { "X-Forwarded-For": "10.0.0.1" } }
+
+    assertEq(status(await app.handle(request("GET", "/notes", ada))), 200)
+    assertEq(status(await app.handle(request("GET", "/notes", forging))), 429)
+
+@test
+async trustProxy_READS_x_forwarded_for_AND_TAKES_ITS_LEFTMOST_ENTRY()
+    // **Behind a proxy the address is the PROXY'S**, so there the header is read first and every
+    // client would otherwise share one bucket. The leftmost entry is the client, a proxy appending
+    // the peer it saw to whatever it was given.
+    var at = 0
+    val app = counting(() -> at, { trustProxy: true })
+
+    val ada = { address: "10.0.0.9", headers: { "X-Forwarded-For": "203.0.113.7, 70.41.3.18" } }
+    val bob = { address: "10.0.0.9", headers: { "X-Forwarded-For": "203.0.113.9, 70.41.3.18" } }
+
+    assertEq(status(await app.handle(request("GET", "/notes", ada))), 200)
+    assertEq(status(await app.handle(request("GET", "/notes", bob))), 200)
+    assertEq(status(await app.handle(request("GET", "/notes", ada))), 429)
+
+@test
+async trustProxy_FALLS_BACK_TO_x_real_ip_AND_THEN_TO_THE_ADDRESS()
+    // nginx writes `X-Real-IP` and not always the other, and a request that reached a trusting
+    // server without either is still somebody -- the socket says who.
+    var at = 0
+    val app = counting(() -> at, { trustProxy: true })
+
+    val real = { address: "10.0.0.9", headers: { "X-Real-IP": "203.0.113.9" } }
+    val bare = { address: "10.0.0.9" }
+
+    assertEq(status(await app.handle(request("GET", "/notes", real))), 200)
+    assertEq(status(await app.handle(request("GET", "/notes", bare))), 200)
+    assertEq(status(await app.handle(request("GET", "/notes", real))), 429)
+    assertEq(status(await app.handle(request("GET", "/notes", bare))), 429)
+
+@test
+async A_TRUSTED_HEADER_WITH_NOTHING_IN_IT_IS_A_HEADER_THAT_IS_NOT_THERE()
+    // **The empty bucket would be the whole internet.** A proxy that writes the name and nothing
+    // after it -- or a list beginning with a comma -- would otherwise put every client it forwards
+    // under the key `""`, and one of them would spend the allowance of all of them.
+    var at = 0
+    val app = counting(() -> at, { trustProxy: true })
+
+    val blank = { address: "203.0.113.7", headers: { "X-Forwarded-For": "  " } }
+    val ada = { address: "203.0.113.9", headers: { "X-Forwarded-For": ", 198.51.100.4" } }
+
+    assertEq(status(await app.handle(request("GET", "/notes", blank))), 200)
+    assertEq(status(await app.handle(request("GET", "/notes", ada))), 200)
+
+    // The blank one fell through to its own address, and the malformed list to its first real entry,
+    // so neither is the other and neither is the empty string.
+    assertEq(status(await app.handle(request("GET", "/notes", blank))), 429)
+    assertEq(status(await app.handle(request("GET", "/notes", ada))), 429)
+
+@test
+async A_REQUEST_THE_SOCKET_CANNOT_NAME_IS_COUNTED_UNDER_ONE_BUCKET()
+    // **`address` is `null` where the socket cannot say**, and what is left is a global limit rather
+    // than a per-client one. That is said in the README rather than left to be found out, and a
+    // deployment whose clients are accounts passes its own `key`.
+    var at = 0
+    val app = counting(() -> at, {})
+
+    val nobody = { address: null }
+
+    assertEq(status(await app.handle(request("GET", "/notes", nobody))), 200)
+    assertEq(status(await app.handle(request("GET", "/notes", nobody))), 429)
 
 @test
 async THE_GUARD_PRINTS_UNDER_ITS_OWN_NAME()

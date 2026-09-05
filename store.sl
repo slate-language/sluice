@@ -18,6 +18,10 @@
 // **`get` answers `null` for an id that was never there, one that expired and one that was revoked**,
 // which are one thing to the guard above it: there is nobody logged in. A store that told them apart
 // would be answering a question only somebody forging an id wants asked.
+//
+// **A DELETE IS `without`, AND THE MARK-AND-REBUILD IT REPLACES WAS A WORKAROUND FOR A MISSING
+// BUILTIN.** slate 0.0.30 takes a key out of an object; what the cost of that is, and why it is the
+// right cost here, is on `memoryStore` itself.
 
 import { epochMillis, now } from slate:time
 
@@ -35,8 +39,20 @@ export makeMemoryStore(options: object = {}) -> object
     val clock = options.now ?? systemClock
     val standing = options.ttl ?? null
 
-    // `entries` is id to `{ value, ends }` with a dead one held as `null`; `gone` counts those.
-    val table = { held: {}, gone: 0 }
+    // **A DELETE IS `without`, WHICH IS slate 0.0.30's AND IS WHY THIS STORE IS NOW FOUR LINES
+    // SHORTER THAN ITS OWN EXPLANATION USED TO BE.** Until then there was no way to take a key out of
+    // an object, so an entry was marked dead, a counter followed how many dead ones there were, and
+    // the table was rebuilt whenever they outnumbered the living -- five moving parts and one
+    // invariant between them, all of it for a missing builtin.
+    //
+    // **WHAT IT COSTS IS SAID RATHER THAN HIDDEN: `without` COPIES THE TABLE, so a delete is linear
+    // in the sessions held where the scheme it replaces was amortised constant.** A `set` mints a new
+    // id and deletes the old one, so a delete is as common as a login -- and a login against a table
+    // of fifty thousand copies fifty thousand entries. That is the right trade for THIS store and
+    // said here so that it is not discovered: it is the reference implementation, it holds one
+    // process's sessions, and a service with enough of them for the copy to be what hurts wanted
+    // redis or a table several orders of magnitude earlier.
+    val table = { held: {} }
 
     async get(id: string)
         val one = entryOf(table, id)
@@ -45,7 +61,7 @@ export makeMemoryStore(options: object = {}) -> object
 
         // **Expiry is checked on the way out rather than swept on a timer.** A timer would keep this
         // store alive for as long as the program, and an entry nobody asks for costs nothing but the
-        // room it is in -- which the next `set` past the threshold reclaims anyway.
+        // room it is in -- which the read that finds it expired takes away.
         if one.ends != null && clock() >= one.ends
             drop(table, id)
 
@@ -56,7 +72,7 @@ export makeMemoryStore(options: object = {}) -> object
     async set(id: string, value, ttl = null)
         val lasts = ttl ?? standing
 
-        put(table, id, { value: value, ends: if lasts == null then null else clock() + lasts })
+        table.held[id] = { value: value, ends: if lasts == null then null else clock() + lasts }
 
         null
 
@@ -68,44 +84,19 @@ export makeMemoryStore(options: object = {}) -> object
     // How many sessions are held. **Not part of the interface** -- a redis store could not answer it
     // without a scan -- and it is here because the alternative for a test that means to say an entry
     // was really removed is to trust that it was.
-    size() -> integer = len(keys(table.held)) - table.gone
+    size() -> integer = len(keys(table.held))
 
     { get: get, set: set, delete: delete, size: size }
 
 systemClock() -> integer = epochMillis(now())
 
-// The entry under an id, or `null` for one that is not there or is dead.
+// The entry under an id, or `null` for one that is not there.
 entryOf(table: object, id: string) = if has(table.held, id) then table.held[id] else null
 
-put(table: object, id: string, one: object)
-    if has(table.held, id) && table.held[id] == null then table.gone = table.gone - 1
-
-    table.held[id] = one
-
-    null
-
-// **SLATE HAS NO WAY TO REMOVE A KEY FROM AN OBJECT** -- `keys`, `values`, `entries` and `has` are
-// the whole of the object surface -- so an entry is marked dead and the table is rebuilt once the
-// dead outnumber the living. That is amortised constant per delete, which is what this store needs:
-// a session that is written is written under a NEW id and the old one is deleted, so a delete is as
-// common as a login and not as rare as a logout.
+// **`without` ANSWERS A NEW OBJECT**, which is `with`'s rule read the other way, so the table is
+// replaced rather than changed under whoever is holding it. An id that is not there is not an error,
+// so this needs no test of its own before it runs.
 drop(table: object, id: string)
-    if entryOf(table, id) == null then return null
-
-    table.held[id] = null
-    table.gone = table.gone + 1
-
-    if table.gone * 2 > len(keys(table.held)) then compact(table)
-
-    null
-
-compact(table: object)
-    var fresh = {}
-
-    for [k, v] in entries(table.held)
-        if v != null then fresh[k] = v
-
-    table.held = fresh
-    table.gone = 0
+    table.held = without(table.held, id)
 
     null

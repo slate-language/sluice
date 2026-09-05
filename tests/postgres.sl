@@ -6,13 +6,14 @@
 // a unique violation comes back as, and the columns as the types they were read into.
 //
 // **`slate:net` is not on the JavaScript back end**, so nothing here can run under `slate test --js`:
-// the names import and say *"not in the JavaScript back end yet"* when a program reaches them. slate
-// has no way to mark a test as skipped on one host, so each test here asks whether it can bind a
-// socket and answers rather than failing, and the run says so once.
+// the names import and say *"not in the JavaScript back end yet"* when a program reaches them.
+// **Every test here therefore ends in a `skip` on that host**, which slate 0.0.30 gave the runner --
+// a third verdict beside a pass and a failure, said on the line where a passing test's timing goes
+// and counted on the last line of the run. Until then a test left out on one host `return`ed, which
+// is a PASS: nine of them, green, having asserted nothing at all.
 
 import { percentDecode } from slate:http
 import { close as closeSocket } from slate:net
-import { stderr } from slate:process
 
 import { request } from "../sluice.sl"
 import { doc, status, header } from "./support.sl"
@@ -28,28 +29,33 @@ val Guard = 3000
 // The columns of the tasks table, as a server describes them: `int4`, `text` and `bool`.
 val Columns = [{ name: "id", oid: 23 }, { name: "title", oid: 25 }, { name: "done", oid: 16 }]
 
-var probed = null
+// Why this host cannot run these, or `null` where it can. **The question is asked of the HOST and
+// not of a flag**, there being nothing to read: a name on the JavaScript back end's owed list exists
+// and faults when it is called, so calling it is the only way to find out. Asked once, since the
+// answer cannot change.
+val Host = { asked: false, why: null }
 
-// Whether this host has sockets at all, asked once and said once.
-sockets() -> boolean
-    if probed == null then probed = askedFor()
+lacking() -> string | null
+    if Host.asked then return Host.why
 
-    probed
+    Host.asked = true
 
-askedFor() -> boolean
-    val s = server((sql, params) -> { tag: "SELECT 0" }) catch e -> null
+    try
+        closeSocket(server((sql, params) -> { tag: "SELECT 0" }))
+    catch e
+        Host.why = "this host has no listener, and a real PostgreSQL exchange needs one: " + e.message
 
-    if s == null
-        // **On stderr and not through `print`**, because the runner keeps what a PASSING test wrote
-        // and shows it only above a failure -- so a skip said with `print` is a skip nobody is told
-        // about, which is the one thing worse than a red test.
-        stderr("  --    tests/postgres.sl needs a real socket, and this host has none\n")
+    Host.why
 
-        return false
+// **`skip` RAISES, which is why nothing follows this line where it fires.** A skip is the test's
+// whole verdict, exactly as `exit` is a script's, so forgetting a `return` beside it cannot leave the
+// test running on the host it was written to be left out of.
+needsASocket()
+    val why = lacking()
 
-    closeSocket(s)
+    if why != null then skip(why)
 
-    true
+    null
 
 // A watchdog that ends the run rather than letting it hang, and says which test left it running.
 //
@@ -103,7 +109,7 @@ val OneTask = { "create table": { tag: "CREATE TABLE" },
 
 @test
 async THE_STORE_MAKES_ITS_TABLE_ON_THE_WAY_IN()
-    if !sockets() then return
+    needsASocket()
 
     val guard = late("schema test")
     val seen = []
@@ -124,7 +130,7 @@ async THE_STORE_MAKES_ITS_TABLE_ON_THE_WAY_IN()
 async A_LISTING_READS_ITS_COLUMNS_AS_THE_TYPES_THE_SERVER_NAMED()
     // **`t` is not the string `"t"` once the column says `bool`**, and `1` is not `"1"` once it says
     // `int4`. Reading the OIDs is `pg`'s job and this is where the store finds out it happened.
-    if !sockets() then return
+    needsASocket()
 
     val guard = late("listing test")
     val seen = []
@@ -146,7 +152,7 @@ async A_TITLE_CROSSES_AS_A_PARAMETER_AND_NEVER_AS_SQL()
     // **The server parses the statement before it is given a single value**, so nothing a title
     // contains can become part of the query. `$1` is the whole of the defence and there is no
     // escaping function anywhere in this example.
-    if !sockets() then return
+    needsASocket()
 
     val guard = late("parameter test")
     val seen = []
@@ -172,7 +178,7 @@ async A_TITLE_CROSSES_AS_A_PARAMETER_AND_NEVER_AS_SQL()
 async A_UNIQUE_VIOLATION_COMES_BACK_AS_23505_AND_NOT_AS_A_FAULT()
     // **A refusal is an answer.** The whole point of the SQLSTATE surviving the trip is that the
     // application above can turn `23505` into a `409` without knowing what a database is.
-    if !sockets() then return
+    needsASocket()
 
     val guard = late("violation test")
     val seen = []
@@ -192,7 +198,7 @@ async A_UNIQUE_VIOLATION_COMES_BACK_AS_23505_AND_NOT_AS_A_FAULT()
 async AN_UPDATE_THAT_MATCHED_NOTHING_ANSWERS_null_RATHER_THAN_A_REFUSAL()
     // **A task that is not there is not a database error**, and telling the two apart here is what
     // makes it a `404` rather than a `503`.
-    if !sockets() then return
+    needsASocket()
 
     val guard = late("update test")
     val seen = []
@@ -211,7 +217,7 @@ async AN_UPDATE_THAT_MATCHED_NOTHING_ANSWERS_null_RATHER_THAN_A_REFUSAL()
 async A_DELETE_ANSWERS_WHETHER_THERE_WAS_ONE_TO_REMOVE()
     // **`INSERT` writes an object id before its count and nothing else does**, so the count is the
     // last word of the tag -- which is what `pg` reads and what this store's `true` rests on.
-    if !sockets() then return
+    needsASocket()
 
     val guard = late("delete test")
     val seen = []
@@ -232,7 +238,7 @@ async A_DELETE_ANSWERS_WHETHER_THERE_WAS_ONE_TO_REMOVE()
 
 @test
 async THE_HEALTH_PING_IS_A_ROUND_TRIP_AND_A_SERVER_THAT_REFUSES_IS_NOT_WELL()
-    if !sockets() then return
+    needsASocket()
 
     val guard = late("ping test")
     val seen = []
@@ -258,7 +264,7 @@ async THE_HEALTH_PING_IS_A_ROUND_TRIP_AND_A_SERVER_THAT_REFUSES_IS_NOT_WELL()
 async A_SERVER_THAT_IS_NOT_THERE_IS_A_RESULT_AND_NOT_A_FAULT()
     // **A database that is not up is something a program handles**, which is `pg`'s rule for
     // anything that reaches the network -- and what `postgres()` passes on rather than raising.
-    if !sockets() then return
+    needsASocket()
 
     val guard = late("unreachable test")
     val fake = server((sql, params) -> { tag: "SELECT 0" })
@@ -279,7 +285,7 @@ async A_SERVER_THAT_IS_NOT_THERE_IS_A_RESULT_AND_NOT_A_FAULT()
 async THE_APPLICATION_ANSWERS_HTTP_OVER_A_SOCKET_TO_THE_DATABASE()
     // **Every layer of the example at once**: a request value, the guards, the session, the store,
     // `pg`, a socket, the wire protocol, and a row read back out of it into a 201.
-    if !sockets() then return
+    needsASocket()
 
     val guard = late("end to end test")
     val seen = []
