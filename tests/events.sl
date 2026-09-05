@@ -398,3 +398,19 @@ async A_ROUTE_REPLAYS_WHAT_THE_REQUEST_ASKED_FOR_AND_THE_ID_IS_ON_THE_WIRE()
     assert(contains(step.value, "id: 1"))
     assert(contains(step.value, "event: made"))
     assert(contains(step.value, "data: {\"id\":7}"))
+
+@test
+async AN_ID_AHEAD_OF_EVERYTHING_HELD_REPLAYS_NOTHING_AND_GOES_LIVE()
+    // **A server that restarted counts from 1 again**, so a client reconnecting to it holds an id
+    // ahead of anything this hub has. Nothing is replayed and the stream is live, which is the only
+    // answer that cannot deliver something the client has already seen.
+    val feed = hub({ replay: 8 })
+
+    for i in 1..3
+        feed.publish("notes", i)
+
+    val ahead = feed.subscribe("notes", { lastEventId: "500" })
+
+    feed.publish("notes", "live")
+
+    assertEq((await ahead.next()).value.data, "live")

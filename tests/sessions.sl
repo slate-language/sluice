@@ -362,6 +362,11 @@ async A_STORED_SESSION_ROUND_TRIPS_AND_THE_COOKIE_CARRIES_ONLY_AN_ID()
 
     assertEq(doc(back).who, "ada")
 
+    // And reading one writes nothing: no cookie, and the entry that was there is the entry that is
+    // there. A store mode that rewrote on every read would be a database write per request.
+    assertEq(len(cookies(back)), 0)
+    assertEq(store.size(), 1)
+
 @test
 async A_STORED_SESSION_MAY_BE_BIGGER_THAN_A_COOKIE()
     // **The other half of what a store buys.** A signed cookie is about 4 KB and this is 40, so the
@@ -507,17 +512,20 @@ async THE_TWO_MODES_STAND_SIDE_BY_SIDE_AND_NEITHER_READS_THE_OTHER()
 @test
 async A_STORE_IS_THREE_FUNCTIONS_AND_ANYTHING_ANSWERING_THEM_IS_ONE()
     // **The interface is what this asserts**: no registration, no base class, nothing of this
-    // package's in it. A store over a database is this, with `await` in the middle.
+    // package's in it. A store over a database is this with `await` in the middle -- and these are
+    // deliberately NOT `async`, which is the other half of the claim: the guard awaits all three and
+    // `await` of a plain value answers it, so the promise in the interface is what a store MAY answer
+    // and not what it must.
     val kept = { rows: {} }
 
-    async get(id: string) = if has(kept.rows, id) then kept.rows[id] else null
+    get(id: string) = if has(kept.rows, id) then kept.rows[id] else null
 
-    async set(id: string, value, ttl = null)
+    set(id: string, value, ttl = null)
         kept.rows[id] = value
 
         null
 
-    async delete(id: string)
+    delete(id: string)
         if has(kept.rows, id) then kept.rows[id] = null
 
         null
@@ -555,3 +563,44 @@ async A_STORE_THAT_FAULTS_IS_A_500_AND_NOT_A_QUIET_LOGGING_OUT()
 
     assertEq(status(r), 500)
     assertEq(caught, "the session store is not there")
+
+@test
+async A_COOKIE_PAST_ITS_maxAge_IS_NOBODY_AND_THE_STORE_IS_NOT_ASKED()
+    // **The cookie's own expiry is read before the store is**, which is what stops an expired session
+    // costing a lookup -- and what stops a store that has forgotten to expire an entry resurrecting
+    // one the cookie says is over.
+    val store = counted(memoryStore())
+    val app = made(Secret, { store: store, maxAge: 0 - 1 })
+    val cookie = await cookieFrom(app)
+
+    assertEq(store.seen.gets, 0)
+    assertEq(doc(await app.handle(request("GET", "/me", { cookies: { session: cookie } }))).who, null)
+    assertEq(store.seen.gets, 0)
+
+@test
+async A_STORED_SESSION_AND_A_CSRF_TOKEN_IN_ONE_RESPONSE_ARE_STILL_TWO_COOKIES()
+    // The neighbouring guard, over the mode that awaits: the session cookie is now written after two
+    // store calls, and `withHeaders` still has to keep both `Set-Cookie` lines.
+    val app = api()
+
+    app.get("/in", csrf({}, session(Secret, { store: memoryStore() }, greeter)))
+
+    val two = cookies(await app.handle(request("GET", "/in")))
+
+    assertEq(len(two), 2)
+    assert(contains(two[0], "session=") || contains(two[1], "session="))
+    assert(contains(two[0], "csrf=") || contains(two[1], "csrf="))
+
+@test
+async A_STORED_SESSION_COOKIE_CARRIES_THE_SAME_ATTRIBUTES_AS_ANY_OTHER()
+    // **`options` is one object and `store` is this guard's own**, so it has to be kept off the
+    // cookie by name -- a member `setCookie` has never heard of going straight through is otherwise
+    // exactly what the pass-through rule promises.
+    val line = cookies(await made(Secret, { store: memoryStore(), maxAge: 60 }).handle(
+        request("POST", "/in", { body: "\"ada\"" })))[0]
+
+    assert(contains(line, "HttpOnly"))
+    assert(contains(line, "SameSite=Lax"))
+    assert(contains(line, "Path=/"))
+    assert(contains(line, "Max-Age=60"))
+    assert(!contains(line, "store"))
