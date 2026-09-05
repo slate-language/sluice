@@ -11,10 +11,16 @@
     // declaration is what carries the annotation, and an annotation is the only check a consumer's
     // call gets.
     main: "sluice.sl",
-    // `logger` is a DEV dependency: the guard hands a sink a record and the package takes one, and
-    // `tests/logging.sl` and `examples/notes.sl` are the only things that use it. A consumer of
-    // `sluice` gets neither, so nothing it installs has to carry a logger it did not ask for.
+    // **Both dependencies are DEV dependencies**, resolved only while sluice is the project being
+    // built: a consumer of `sluice` installs neither, so nothing it puts on a machine carries a
+    // logger or a database client it did not ask for.
+    //
+    // `logger` is what `tests/logging.sl` and `examples/notes.sl` use -- the guard hands a sink a
+    // record and that package takes one, and the test is the only thing that says the two really
+    // fit. `pg` is what `examples/tasks/` is written over, and `tests/tasks.sl` and
+    // `tests/postgres.sl` are what keep it honest.
     devDependencies: {
         logger: { git: "github.com/slate-language/logger", version: "0.1.0" },
+        pg: { git: "github.com/slate-language/pg", version: "0.3.0" },
     },
 }

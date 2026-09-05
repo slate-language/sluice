@@ -412,7 +412,10 @@ async A_STORED_SESSION_ROUND_TRIPS_AND_THE_COOKIE_CARRIES_ONLY_AN_ID()
     val app = made(Secret, { store: store })
     val cookie = await cookieFrom(app)
 
-    assert(!contains(cookie, "ada"))
+    // **What went out is read as a payload and not searched for as a substring.** The id and the
+    // digest are both hex, and `ada` is three hex digits -- so a search of the whole cookie for the
+    // session's own value fails about once in forty runs on a cookie that is perfectly correct.
+    assert(!has(payloadOf(cookie), "v"))
     assert(payloadOf(cookie).i is string)
     assertEq(store.size(), 1)
 
