@@ -147,13 +147,14 @@ request is named, then bounded, then counted, and only then is its body anybody'
 **One name for this request, on `req.id` and echoed on the answer.** An id a client sent under
 `X-Request-Id` is taken rather than replaced — a gateway or a caller has already written it in a log
 of its own, and renaming it breaks the one join a person is trying to make. Where there was none, 16
-random bytes in hex.
+random bytes in base64url — 22 characters carrying what 32 of hex carried, on a value that goes into
+a header on every answer and into every log line the request writes.
 
 **`logger`'s record carries `id` wherever this guard ran**, which is what turns a log into something
 a person can follow one request through:
 
 ```
-2026-09-05T12:07:51Z INFO  request method=POST path=/notes status=201 ms=0 id=43078cb214c00eb753…
+2026-09-05T12:07:51Z INFO  request method=POST path=/notes status=201 ms=0 id=Qwc4shTADrdTa1jXzR0Vpw
 ```
 
 **What a client sent is checked before it is echoed.** The value goes back out in a response header,
@@ -402,6 +403,23 @@ problem. The comparison is `slate:crypto`'s `timingSafeEqual`. `options` takes `
 **This is the one cookie deliberately not `HttpOnly`**, and the whole double-submit argument rests on
 it: a page has to be able to read the token to send it back.
 
+## Upgrading from 0.2.0
+
+**Every session cookie written by 0.2.0 reads as nobody, and every logged-in user is logged out
+once.** The signature and the stored session id were hex and are now base64url — `slate:url`'s, from
+slate 0.0.29 — so the digest a browser is holding is not the digest this version makes of the same
+payload. That is the ordinary way of being nobody: `req.session.value` is `null`, the handler is told
+there is nobody logged in, and the next login writes a cookie in the new spelling. Nothing faults and
+nothing is refused.
+
+**Deploy it the way you would a change of secret**, which is what it amounts to for one release: at
+a quiet hour, or behind a login page people can go through again. There is no dual-reading mode and
+that is deliberate — a reader that accepted both spellings would accept two encodings of one value
+for the life of the package, which is the shape of hole a token compared as text is walked through.
+
+**A CSRF token is unaffected** — it is compared against itself and never decoded, so a client holding
+one issued by 0.2.0 keeps passing with it. So is a request id, which lives for one request.
+
 ## Events
 
 **A hub, and the server-sent stream a subscriber reads it through.**
@@ -523,11 +541,15 @@ slate examples/notes.sl
 `check/` holds the two hand-run drivers — the exhaustiveness refusal above, and a defect stopping the
 program — and they are not under `tests/` because passing would mean ending the run.
 
-**It needs slate 0.0.24 or later.** Shape values with `test`/`mismatch`/`name` are what make a
+**It needs slate 0.0.29 or later.** Shape values with `test`/`mismatch`/`name` are what make a
 declaration the validator and `?` optional keys are what let a request body have one, both from
 0.0.7; 0.0.23 gave `slate:http` the `percentDecode` a path parameter is read with and the manifest
 the `devDependencies` section below; 0.0.24 made a `data` name one of those shape values, which is
-what `api.failures(Failure, …)` on this page is.
+what `api.failures(Failure, …)` on this page is; 0.0.27 let `slate:http` take an array for a header
+that repeats, which is how a login writes two cookies. **0.0.29 is the floor now, and it is two
+things**: `slate:url`'s `base64urlEncode` and `base64urlDecode`, which every signature and session id
+on this page is written in, and a streamed response telling its source that its reader has gone,
+which is what stops an event stream leaking a subscriber per browser tab.
 
 **[logger](https://github.com/slate-language/logger) 0.1.0 is a DEV dependency**, used by the example
 and one test. Installing `sluice` does not install it: a package's own `devDependencies` are resolved

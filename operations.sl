@@ -12,6 +12,7 @@
 
 import { monotonic } from slate:time
 import { randomBytes } from slate:crypto
+import { base64urlEncode } from slate:url
 
 import { guard, headerOf } from "./guards.sl"
 import { problemResponse, jsonResponse, withHeaders } from "./response.sl"
@@ -38,7 +39,7 @@ import { problemResponse, jsonResponse, withHeaders } from "./response.sl"
 // | option | |
 // |---|---|
 // | `header` | the name, read without case and echoed as written. `"X-Request-Id"` |
-// | `generate` | a function answering a new id. 16 random bytes in hex by default |
+// | `generate` | a function answering a new id. 16 random bytes in base64url by default |
 export requestIdGuard(options: object) -> object =
     guard("requestId", (h) -> identified(options, h))
 
@@ -79,12 +80,17 @@ usable(id: string) -> boolean
 
     true
 
-// A new id: 16 bytes from the operating system, in hex.
+// A new id: 16 bytes from the operating system, in base64url.
 //
 // **Random rather than counted**, because a counter is one server's and an id has to be unique across
 // however many of them are behind the load balancer -- and because a sequential id tells whoever
 // holds one how much traffic the service took.
-newId() -> string = hex(randomBytes(16))
+//
+// **base64url and not hex**, which is `slate:url`'s from slate 0.0.29: the same 128 bits in 22
+// characters rather than 32, on a value that is written into a header on every response and into
+// every log line the request produces. The alphabet is a subset of `IdCharacters` above, so an id
+// this generated is one this would accept from a client.
+newId() -> string = base64urlEncode(randomBytes(16))
 
 // -- the deadline ----------------------------------------------------------------------------------
 
@@ -400,18 +406,3 @@ asReasons(said) -> array
     if said is array then return said
 
     throw "a `health` check answers the reasons it is unwell -- a string, an array of them, or null"
-
-// -- hex -------------------------------------------------------------------------------------------
-
-val Digits = "0123456789abcdef"
-
-// Bytes as hex. **slate has no base64 a program can reach**, so text made of bytes is hex here as it
-// is in `sessions.sl` -- and the two copies are the argument for a shared one, not for importing a
-// signing module to make a log id.
-hex(bytes: array) -> string
-    var out = ""
-
-    for b in bytes
-        out = out + Digits[(b / 16)..<(b / 16 + 1)] + Digits[(b % 16)..<(b % 16 + 1)]
-
-    out

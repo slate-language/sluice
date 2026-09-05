@@ -26,7 +26,9 @@ async A_REQUEST_THAT_ARRIVED_WITH_NO_ID_IS_GIVEN_ONE()
     val r = await app.handle(request("GET", "/notes"))
     val id = response(r).body
 
-    assertEq(len(id), 32)
+    // **22 characters, which is 16 bytes in base64url** -- the same randomness the hex spelling
+    // carried in 32, on a value written into a header on every answer and into every log line.
+    assertEq(len(id), 22)
     assertEq(header(r, "x-request-id"), id)
 
 @test
@@ -42,6 +44,22 @@ async TWO_REQUESTS_ARE_NOT_GIVEN_THE_SAME_ID()
     assert(one != two, "16 random bytes, not a constant")
 
 @test
+async AN_ID_THIS_GUARD_GENERATED_IS_ONE_IT_WOULD_ACCEPT_FROM_A_CLIENT()
+    // **The alphabet claim, checked rather than asserted in a comment.** base64url is `-` and `_`
+    // beside the letters and digits, and every one of them is in the set an id may be made of -- so
+    // a second server behind this one, handed the id this one wrote, echoes it rather than replacing
+    // it. A generator whose output its own check refused would break the join the header exists for,
+    // and nothing else in this file would have noticed.
+    val app = api()
+
+    app.get("/notes", requestId({}, (req) -> req.id))
+
+    val made = response(await app.handle(request("GET", "/notes"))).body
+    val again = await app.handle(request("GET", "/notes", { headers: { "X-Request-Id": made } }))
+
+    assertEq(response(again).body, made)
+
+@test
 async AN_ID_CARRYING_A_LINE_BREAK_IS_REPLACED_RATHER_THAN_ECHOED()
     // **THIS IS THE ONE THAT MATTERS.** The value goes back out in a response header, so a client
     // that could put a carriage return in it would be writing headers of its own into every answer.
@@ -52,7 +70,7 @@ async AN_ID_CARRYING_A_LINE_BREAK_IS_REPLACED_RATHER_THAN_ECHOED()
     val r = await app.handle(request("GET", "/notes",
         { headers: { "X-Request-Id": "abc\r\nX-Admin: true" } }))
 
-    assertEq(len(response(r).body), 32)
+    assertEq(len(response(r).body), 22)
     assert(!contains(header(r, "x-request-id"), "X-Admin"))
 
 @test
@@ -64,7 +82,7 @@ async AN_ID_LONGER_THAN_THE_LIMIT_IS_REPLACED()
 
     val r = await app.handle(request("GET", "/notes", { headers: { "X-Request-Id": repeat("a", 201) } }))
 
-    assertEq(len(response(r).body), 32)
+    assertEq(len(response(r).body), 22)
 
 @test
 async AN_ID_THAT_IS_EMPTY_OR_A_SPACE_IS_REPLACED()
@@ -72,8 +90,8 @@ async AN_ID_THAT_IS_EMPTY_OR_A_SPACE_IS_REPLACED()
 
     app.get("/notes", requestId({}, (req) -> req.id))
 
-    assertEq(len(response(await app.handle(request("GET", "/notes", { headers: { "x-request-id": "" } }))).body), 32)
-    assertEq(len(response(await app.handle(request("GET", "/notes", { headers: { "x-request-id": "a b" } }))).body), 32)
+    assertEq(len(response(await app.handle(request("GET", "/notes", { headers: { "x-request-id": "" } }))).body), 22)
+    assertEq(len(response(await app.handle(request("GET", "/notes", { headers: { "x-request-id": "a b" } }))).body), 22)
 
 @test
 async THE_HEADER_AND_THE_GENERATOR_ARE_BOTH_THE_PROGRAMS()

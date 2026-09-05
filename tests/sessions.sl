@@ -1,11 +1,25 @@
 // `session(secret)` and `csrf()` -- the cookie a server signs, and the token that goes with it.
 
 import { percentDecode } from slate:http
+import { hmac } from slate:crypto
+import { base64urlEncode } from slate:url
 
 import { api, session, csrf, json, memoryStore, request, response } from "../sluice.sl"
 import { doc, status, header } from "./support.sl"
 
 val Secret = "a secret nobody else has"
+
+// Bytes as hex, which this package no longer writes anywhere. **It is here because a test about the
+// spelling that was dropped has to be able to write it**, and nothing else does.
+val Digits = "0123456789abcdef"
+
+hexOf(bytes: array) -> string
+    var out = ""
+
+    for b in bytes
+        out = out + Digits[(b / 16)..<(b / 16 + 1)] + Digits[(b % 16)..<(b % 16 + 1)]
+
+    out
 
 // An application that reads the session on `GET` and sets one on `POST`.
 made(secret: string, options: object = {}) -> object
@@ -90,6 +104,21 @@ async A_SESSION_SET_BY_ONE_REQUEST_IS_READ_BY_THE_NEXT()
     assertEq(doc(back).who, "ada")
 
 @test
+async THE_DIGEST_IS_BASE64URL_AND_THE_STORED_ID_IS_TOO()
+    // **The format, pinned where a change to it is a change to every cookie already written.** A
+    // SHA-256 digest is 43 base64url characters and was 64 hex ones; an id of 18 bytes is 24 and was
+    // 36. Both alphabets survive a cookie unescaped, so the 33 characters are a saving on the wire
+    // and not something `setCookie`'s percent-encoding takes back.
+    val cookie = await signedIn()
+    val at = lastIndexOf(cookie, ".")
+
+    assertEq(len(cookie[(at + 1)..]), 43)
+
+    val stored = await cookieFrom(made(Secret, { store: memoryStore() }))
+
+    assertEq(len(payloadOf(stored).i), 24)
+
+@test
 async NO_COOKIE_AT_ALL_IS_NOBODY_AND_NOT_A_FAILURE()
     // A request with no session is the ordinary case, not an error: it is what everybody's first
     // request looks like.
@@ -118,13 +147,42 @@ async A_PAYLOAD_CHANGED_UNDER_A_GOOD_DIGEST_IS_NOBODY()
     assertEq(doc(back).who, null)
 
 @test
-async A_DIGEST_THAT_IS_NOT_HEX_IS_NOBODY_RATHER_THAN_A_FAULT()
+async A_DIGEST_THAT_IS_NOT_BASE64URL_IS_NOBODY_RATHER_THAN_A_FAULT()
     // A cookie arrives from outside the program, so nonsense in it is a condition and not a defect.
-    // These are the shapes that would reach the decoder rather than being turned away by its length.
-    for bad in ["{\"v\":1}.zz", "{\"v\":1}.abc", "{\"v\":1}.", "nodigest", "", "."]
+    // **Every way `base64urlDecode` can refuse is here**, since each of them is a client's text
+    // reaching the reader: a character outside the alphabet, `=` -- the padded spelling being base64
+    // and not this -- a length one past a multiple of four, and bits past the last whole byte. The
+    // shapes that decode perfectly well and are simply not the digest are below them.
+    for bad in ["{\"v\":1}.a*b", "{\"v\":1}.YQ==", "{\"v\":1}.abcde", "{\"v\":1}.AB",
+                "{\"v\":1}.zz", "{\"v\":1}.abc", "{\"v\":1}.", "nodigest", "", "."]
         val back = await made(Secret).handle(request("GET", "/me", { cookies: { session: bad } }))
 
         assertEq(doc(back).who, null)
+
+@test
+async A_COOKIE_SIGNED_THE_WAY_0_2_0_SIGNED_ONE_IS_NOBODY_AND_NOT_A_FAULT()
+    // **What adopting base64url costs, pinned rather than described.** A server that wrote its
+    // digests in hex is what every 0.2.0 deployment was, and the cookies it wrote are in browsers
+    // now -- so the one thing that must be true of them is that they read as a client with no
+    // session rather than as anything else. A hex digest is 64 characters, every one of them a
+    // base64url character, so it decodes cleanly to 48 bytes and simply is not the 32 the HMAC
+    // makes: `timingSafeEqual` answers `false` for two byte strings of different lengths rather
+    // than faulting, and the request is nobody by the ordinary path.
+    val payload = "{\"v\":\"ada\",\"e\":null}"
+    val old = payload + "." + hexOf(hmac("SHA-256", Secret, payload))
+
+    assertEq(len(hexOf(hmac("SHA-256", Secret, payload))), 64)
+
+    val back = await made(Secret).handle(request("GET", "/me", { cookies: { session: old } }))
+
+    assertEq(doc(back).who, null)
+
+    // And the control: the same payload under the digest this version writes IS somebody, so what
+    // the test above says is that the spelling changed and not that the payload is unreadable.
+    val now = payload + "." + base64urlEncode(hmac("SHA-256", Secret, payload))
+
+    assertEq(doc(await made(Secret).handle(
+        request("GET", "/me", { cookies: { session: now } }))).who, "ada")
 
 @test
 async A_SESSION_PAST_ITS_maxAge_IS_NOBODY()

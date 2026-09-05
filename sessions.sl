@@ -16,14 +16,21 @@
 // session in one and its id in the other -- so everything already written against `req.session` is
 // unchanged, and `store.sl` says what a store is.
 //
-// **The signature is HEX and not base64url**, which is a smaller decision than it looks: slate has no
-// base64 a program can reach -- `slate:jwt` has one privately -- and 22 extra bytes on a cookie that
-// `setCookie` percent-encodes anyway is cheaper than a fourth copy of an encoder. `slate:url` is
-// growing a `base64url`, and this is what will use it.
+// **THE SIGNATURE AND THE STORED ID ARE BASE64URL**, which is `slate:url`'s from slate 0.0.29 and was
+// hex before it: a digest is 43 characters rather than 64 and an id 24 rather than 36, on a cookie
+// that `setCookie` percent-encodes anyway. The alphabet is the one a cookie carries unescaped, so
+// the saving is real rather than swallowed by the encoding.
+//
+// **A COOKIE WRITTEN BY THE HEX SPELLING IS NOBODY TO THIS ONE**, which is what adopting it costs:
+// the digest a client is holding is not the digest this reader makes of the payload, so every
+// session and every login written by a server before this reads as a client with no cookie at all.
+// That is the ordinary way of being nobody and not a failure -- the reader answers `null`, the
+// handler is told there is nobody logged in, and the next login writes the new spelling.
 
 import { hmac, randomBytes, timingSafeEqual } from slate:crypto
 import { setCookie } from slate:http
 import { epochMillis, now } from slate:time
+import { base64urlEncode, base64urlDecode } from slate:url
 
 import { guard } from "./guards.sl"
 import { problemResponse, withHeaders } from "./response.sl"
@@ -126,7 +133,10 @@ async storedCookie(store: object, secret: string, name: string, id, held, option
     // **144 bits of the operating system's randomness**, which is what makes an id unguessable and
     // is the only property it has: it says nothing, means nothing, and is worth nothing to anybody
     // holding it once the store has let it go.
-    val fresh = hex(randomBytes(18))
+    //
+    // **18 bytes because base64url spends four characters on every three**, so an id that is a
+    // multiple of three is 24 characters with nothing wasted and nothing to pad.
+    val fresh = base64urlEncode(randomBytes(18))
 
     await store.set(fresh, held, ttlOf(options))
 
@@ -147,7 +157,9 @@ signedCookie(secret: string, name: string, carried, options: object, req: object
 
     val payload = toJSON(carried with { e: expiryOf(options) })
 
-    setCookie(name, payload + "." + hex(hmac("SHA-256", secret, payload)), cookieOptions(options, req))
+    val digest = base64urlEncode(hmac("SHA-256", secret, payload))
+
+    setCookie(name, payload + "." + digest, cookieOptions(options, req))
 
 // When this session stops being valid, as milliseconds from the epoch, or `null` for one that lasts
 // as long as the browser is open.
@@ -192,10 +204,17 @@ readSigned(secret: string, raw)
     if at == null || at == 0 then return null
 
     val payload = raw[0..<at]
-    val said = unhex(raw[(at + 1)..])
 
-    if said == null then return null
-    if !timingSafeEqual(said, hmac("SHA-256", secret, payload)) then return null
+    // **A digest arrives from a client**, so text that is not base64url at all is a condition and
+    // not a defect -- `base64urlDecode` answers a result for exactly that reason, and everything it
+    // refuses is one more way of being nobody. **A digest of the wrong LENGTH is nobody too and
+    // costs nothing to reach**: `timingSafeEqual` answers `false` for two byte strings of different
+    // lengths rather than faulting, so the hex spelling this replaced -- 64 characters that are
+    // every one of them base64url, decoding to 48 bytes -- is a failed comparison and not a fault.
+    val said = base64urlDecode(raw[(at + 1)..])
+
+    if !said.ok then return null
+    if !timingSafeEqual(said.value, hmac("SHA-256", secret, payload)) then return null
 
     val parsed = parseJSON(payload)
 
@@ -263,7 +282,7 @@ checked(options: object, h)
         // under a page that had already read it.
         if held != null then return reply
 
-        withHeaders(reply, { "Set-Cookie": setCookie(name, hex(randomBytes(32)),
+        withHeaders(reply, { "Set-Cookie": setCookie(name, base64urlEncode(randomBytes(32)),
             { httpOnly: false, sameSite: "Lax", path: "/", secure: overHttps(req) }) })
 
     inner
@@ -273,43 +292,3 @@ contains(xs: array, v) -> boolean =
         if x == v then return true
 
     false
-
-// -- hex -------------------------------------------------------------------------------------------
-
-val Digits = "0123456789abcdef"
-
-// Bytes as hex. **Written here because slate has no base64 a program can reach** and a signature has
-// to survive a cookie, which is text.
-hex(bytes: array) -> string
-    var out = ""
-
-    for b in bytes
-        out = out + Digits[(b / 16)..<(b / 16 + 1)] + Digits[(b % 16)..<(b % 16 + 1)]
-
-    out
-
-// Hex back to bytes, or `null` for anything that is not hex. **A signature arrives from a client**,
-// so this answers rather than faulting: text from outside the program is a condition and not a
-// defect.
-unhex(s: string)
-    if len(s) % 2 != 0 then return null
-
-    var out = []
-    var i = 0
-
-    while i < len(s)
-        val hi = nibble(s[i..<(i + 1)])
-        val lo = nibble(s[(i + 1)..<(i + 2)])
-
-        if hi < 0 || lo < 0 then return null
-
-        push(out, hi * 16 + lo)
-
-        i = i + 2
-
-    out
-
-nibble(c: string) -> integer =
-    val at = indexOf(Digits, c.lower())
-
-    if at == null then 0 - 1 else at
