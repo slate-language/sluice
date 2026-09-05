@@ -3,6 +3,8 @@
 import { segments, fit } from "./route.sl"
 import { problemResponse } from "./response.sl"
 import { labelOf } from "./guards.sl"
+import { healthHandler } from "./operations.sl"
+import { drainServer } from "./lifecycle.sl"
 
 // `stack([a, b])` -- the guards composed once, here, rather than a list walked per request.
 //
@@ -85,6 +87,13 @@ export makeApi(options: object) -> object
     var fallback = null
     var failureShape = null
     var failureMap = null
+
+    // **How many requests are in this api right now, and whether it is still taking them.** Both are
+    // here rather than in a guard because `handle` is the one function every request goes through --
+    // including the ones no route matched, which a guard would never see and which are exactly the
+    // ones a client retries during a shutdown.
+    var inFlight = 0
+    var stopping = false
 
     val onFault = if has(options, "onFault") then options.onFault else null
 
@@ -218,7 +227,41 @@ export makeApi(options: object) -> object
         problemResponse(500, "Internal Server Error", "this request was not answered",
             { instance: req.path })
 
+    // **Every request is counted in and counted out here**, which is what a shutdown reads to know
+    // whether anybody is still being answered. It is two additions on a path that already awaits a
+    // handler, and it is the only place in a program that can see the number at all -- `slate:http`
+    // knows about connections and not about requests, and a keep-alive connection with nothing on it
+    // is not work.
+    //
+    // **The decrement is written twice because slate has no `finally`.** A handler that faults still
+    // has to be counted out, or a single defect would leave a shutdown waiting out its whole grace
+    // for a request that ended minutes ago.
     async handle(req: object)
+        if stopping then return unavailable(req)
+
+        inFlight = inFlight + 1
+
+        try
+            val reply = await answered(req)
+
+            inFlight = inFlight - 1
+
+            return reply
+        catch e
+            inFlight = inFlight - 1
+
+            rethrow(e)
+
+    // A request that arrived after the server was asked to stop.
+    //
+    // **503 is the load balancer's cue to send the next one elsewhere**, which is the whole reason a
+    // draining server answers at all rather than closing the connection: a client that is told is a
+    // client that retries somewhere useful, and one that is cut off retries here.
+    unavailable(req: object) -> object =
+        problemResponse(503, "Service Unavailable", "this server is shutting down",
+            { instance: req.path })
+
+    async answered(req: object)
         val ready = prepare(req)
         val found = pick(ready.method, segments(ready.path))
 
@@ -246,6 +289,40 @@ export makeApi(options: object) -> object
     listing() -> array =
         map(routes, described)
 
+    // `health(path, check)` -- the route a load balancer, a container runtime and a person with
+    // `curl` all ask the same question through.
+    //
+    // **It is a route convention and not a guard**, which is what it has to be: the thing asking is
+    // not a client of this API, has no token, and is not to be logged with the traffic or counted
+    // against a rate limit. So it is added on its own, under no stack, and a program that wants one
+    // wraps `health` itself.
+    //
+    // **A draining server fails its own health check**, which falls out of the counting above rather
+    // than being arranged: `handle` refuses everything once a drain has started, and this is one of
+    // the things it refuses. That is the order a rolling deployment needs -- stop being sent traffic,
+    // then finish what you have.
+    addHealth(path: string = "/health", check = null)
+        add("GET", path, healthHandler(check))
+
+    countInFlight() -> integer = inFlight
+
+    isDraining() -> boolean = stopping
+
+    // Stop taking requests. **Separate from `drain` so that a program with two servers on one api
+    // can stop them together**, and so that what `drain` does first has a name.
+    startDraining()
+        stopping = true
+
+        null
+
+    // `drain(server, options)` -- stop taking requests, let what is in hand finish, then close.
+    //
+    // **The api fills in the two things only it knows**: how many requests are running, and how to
+    // stop taking new ones. Everything else -- the grace, what closing means -- is the caller's, and
+    // `drain` on its own is exported for a program serving something other than an api.
+    drain(server, options: object = {}) =
+        drainServer(server, options with { inflight: countInFlight, stop: startDraining })
+
     { get: (p, h) -> add("GET", p, h),
       post: (p, h) -> add("POST", p, h),
       put: (p, h) -> add("PUT", p, h),
@@ -254,9 +331,14 @@ export makeApi(options: object) -> object
       head: (p, h) -> add("HEAD", p, h),
       options: (p, h) -> add("OPTIONS", p, h),
       any: (p, h) -> add("", p, h),
+      health: addHealth,
       notFound: setFallback,
       failures: setFailures,
       routes: listing,
+      inflight: countInFlight,
+      draining: isDraining,
+      stop: startDraining,
+      drain: drain,
       handle: handle }
 
 // One row of `api.routes()`. **`handler` is the function itself** rather than a name, slate

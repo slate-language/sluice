@@ -33,6 +33,9 @@ import { makeApi, stack as makeStack, lazy } from "./api.sl"
 import { problemResponse, jsonResponse, asResponse } from "./response.sl"
 import { bodyGuard, queryGuard, bearerGuard, corsGuard, loggerGuard, guard, labelOf } from "./guards.sl"
 import { sessionGuard, csrfGuard } from "./sessions.sl"
+import { requestIdGuard, timeoutGuard, rateLimitGuard, rateStore as makeStore } from "./operations.sl"
+import { multipartGuard } from "./multipart.sl"
+import { drainServer, onShutdown as watchSignals } from "./lifecycle.sl"
 import { makeHub } from "./events.sl"
 import { request as makeRequest } from "./testing.sl"
 
@@ -92,6 +95,63 @@ export logger(sink: function, handler = null) = applied(loggerGuard(sink), handl
 // over https.
 export session(secret: string, options: object = {}, handler = null) =
     applied(sessionGuard(secret, options), handler)
+
+// `requestId(options, handler)` -- one name for this request, on `req.id` and on the answer.
+//
+// An id a client sent under `X-Request-Id` is taken so that a trace already begun is not broken; one
+// that is too long or carries anything a header line means something by is replaced. `logger`'s
+// record carries `id` wherever this ran.
+//
+// `options` takes `header` (`"X-Request-Id"`) and `generate`.
+export requestId(options: object = {}, handler = null) = applied(requestIdGuard(options), handler)
+
+// `timeout(ms, options, handler)` -- answer without the handler where the handler is taking too long.
+//
+// A `503` problem, that being what an ORIGIN server says about not being able to answer -- `504` is
+// for a gateway, and `options.status` is how a handler that really is calling something upstream
+// says so. **A late answer is dropped**, and `options.onLate` is given it.
+export timeout(ms: integer, options: object = {}, handler = null) =
+    applied(timeoutGuard(ms, options), handler)
+
+// `rateLimit(options, handler)` -- a fixed window per key, and `429` with a `Retry-After` over it.
+//
+// `options` takes `limit` (`60`), `window` in milliseconds (`60000`), `key`, `now` and `store`.
+//
+// **The default key is what a proxy said**, `slate:http` not telling a handler who connected -- so a
+// server with nothing in front of it counts every direct client under one name, and one that is
+// exposed directly should pass a `key` of its own rather than trust a header a client can write.
+export rateLimit(options: object = {}, handler = null) = applied(rateLimitGuard(options), handler)
+
+// `rateStore(options)` -- where `rateLimit` keeps its counts when nothing else was given.
+//
+// **`hit(bucket, ttl)` answering the count is the whole interface**, which is the shape a shared
+// store can implement: against redis it is an `INCR` and an expiry, with no read and no race.
+export rateStore(options: object = {}) -> object = makeStore(options)
+
+// `multipart(options, handler)` -- a `multipart/form-data` body as `req.form`, `{ fields, files }`.
+//
+// A file is `{ field, filename, type, content }`. `415` where the body is not multipart, `400` where
+// it will not parse, and `413` over `options.limit` (a megabyte by default).
+//
+// **It reads TEXT uploads.** `serve` hands a body over as a string and one that is not UTF-8 becomes
+// the empty string on the way, so a program taking arbitrary bytes wants `serveStream` and its own
+// reader -- which is what `slate:http` says about multipart in the first place.
+export multipart(options: object = {}, handler = null) = applied(multipartGuard(options), handler)
+
+// `drain(server, options)` -- stop taking requests, let what is in hand finish, then close.
+//
+// **`api.drain(server, options)` is the one to write**, an api being the only thing that can count
+// what is in flight; this is for a program serving something else. It answers `{ cut, waited }`.
+//
+// `options` takes `grace` in milliseconds (`10000`), `inflight`, `stop`, `close` and `poll`.
+export drain(server, options: object = {}) = drainServer(server, options)
+
+// `onShutdown(action, options)` -- run `action` on `SIGTERM` and `SIGINT`, and answer how to stop.
+//
+//     onShutdown(() -> app.drain(server, { grace: 10000 }))
+//
+// `options` takes `signals`, and `on` and `off` for a program that watches them itself.
+export onShutdown(action: function, options: object = {}) -> function = watchSignals(action, options)
 
 // `csrf(options, handler)` -- the double-submit cookie.
 //

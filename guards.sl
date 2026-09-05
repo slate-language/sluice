@@ -138,7 +138,11 @@ unauthorized(req, detail: string) -> object
 
 // One header by name, whatever case it arrived in. `slate:http` lowercases what it parses; a request
 // built by hand in a test need not have.
-headerOf(req, name: string) -> string | null
+//
+// **Exported for the other guard files and not for a consumer**, which is what `export` means in
+// every file here but `sluice.sl`: a name is public because it was declared there, not because it
+// was exported from where it was written.
+export headerOf(req, name: string) -> string | null
     if !has(req, "headers") then return null
 
     for [k, v] in entries(req.headers)
@@ -241,6 +245,11 @@ listed(v) -> string = if v is array then join(v, ", ") else string(v)
 // **The sink is given a record and not a line of text**, so a program can print it, count it, or
 // send it somewhere structured without this package deciding which. `{ method, path, status, ms }`.
 //
+// **`id` is on the record wherever the request has one**, which is what `requestId` puts there --
+// and it is the member that turns a log into something a person can follow one request through. It
+// is absent rather than `null` where nothing set it: a record whose fields depend on which guards
+// ran is one a reader can take at face value, and slate will not store an absence anyway.
+//
 // **A handler that faults is not logged here**, and that is deliberate rather than an oversight: the
 // fault carries on up to `handle`, which answers the `500` and puts the fault back. A guard that
 // swallowed it to log it would be deciding on the program's behalf that a defect is a log line.
@@ -252,10 +261,14 @@ logged(sink, h)
         val started = monotonic()
         val reply = await h(req)
 
-        sink({ method: req.method,
-               path: req.path,
-               status: asResponse(reply).status,
-               ms: (monotonic() - started).millis() })
+        var record = { method: req.method,
+                       path: req.path,
+                       status: asResponse(reply).status,
+                       ms: (monotonic() - started).millis() }
+
+        if has(req, "id") then record["id"] = req.id
+
+        sink(record)
 
         reply
 
