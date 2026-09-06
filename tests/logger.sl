@@ -43,3 +43,44 @@ async THE_HANDLERS_OWN_ANSWER_IS_HANDED_ON_EXACTLY_AS_IT_WAS()
     app.get("/notes", logger(print, (req) -> "the notes"))
 
     assertEq(await app.handle(request("GET", "/notes")), "the notes")
+
+@test
+async THE_ADDRESS_LOGGED_IS_THE_PEER_OF_THE_SOCKET()
+    // `req.address` -- slate 0.0.30's peer of the socket -- is the default, exactly as it is the
+    // default `rateLimit` keys on.
+    var seen = []
+    val app = api()
+
+    app.get("/notes", logger((r) -> push(seen, r), (req) -> "the notes"))
+
+    await app.handle(request("GET", "/notes", { address: "203.0.113.7" }))
+
+    assertEq(seen[0].address, "203.0.113.7")
+
+@test
+async trustProxy_READS_x_forwarded_for_AND_TAKES_ITS_LEFTMOST_ENTRY()
+    // Behind a proxy the address is the proxy's, a proxy appending the peer it saw to whatever it
+    // was given -- so the client is the leftmost entry.
+    var seen = []
+    val app = api()
+
+    app.get("/notes", logger((r) -> push(seen, r), (req) -> "the notes", { trustProxy: true }))
+
+    await app.handle(request("GET", "/notes",
+        { address: "10.0.0.9", headers: { "X-Forwarded-For": "203.0.113.7, 70.41.3.18" } }))
+
+    assertEq(seen[0].address, "203.0.113.7")
+
+@test
+async A_FORWARDED_HEADER_IS_NOT_AN_IDENTITY_UNTIL_trustProxy_SAYS_SO()
+    // Without `trustProxy` the header is a client's own text and buys it nothing -- the address
+    // logged is still the socket's peer.
+    var seen = []
+    val app = api()
+
+    app.get("/notes", logger((r) -> push(seen, r), (req) -> "the notes"))
+
+    await app.handle(request("GET", "/notes",
+        { address: "203.0.113.7", headers: { "X-Forwarded-For": "10.0.0.1" } }))
+
+    assertEq(seen[0].address, "203.0.113.7")
