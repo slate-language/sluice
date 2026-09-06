@@ -415,3 +415,156 @@ async AN_ID_AHEAD_OF_EVERYTHING_HELD_REPLAYS_NOTHING_AND_GOES_LIVE()
     feed.publish("notes", "live")
 
     assertEq((await ahead.next()).value.data, "live")
+
+// -- ending every stream at once -----------------------------------------------------------------------
+
+@test
+async endAll_ENDS_A_PARKED_STREAM_ON_THE_SPOT_AND_SAYS_HOW_MANY()
+    // **A subscriber parked on `next` is the shape a shutdown actually meets**: a browser with an
+    // `EventSource` open and nothing happening. It is told the stream ended rather than left waiting.
+    val feed = hub()
+    val one = feed.subscribe("notes")
+    val waiting = one.next()
+
+    assertEq(feed.endAll(), 1)
+
+    val step = await waiting
+
+    assertEq(step.done, true)
+    assertEq(step.value, null)
+    assertEq(feed.count("notes"), 0, "and the topic is left with nobody on it")
+
+@test
+async endAll_REACHES_EVERY_TOPIC_AND_EVERY_SUBSCRIBER_ON_IT()
+    val feed = hub()
+    val here = feed.subscribe("notes")
+    val alsoHere = feed.subscribe("notes")
+    val elsewhere = feed.subscribe("alerts")
+
+    val parked = [here.next(), alsoHere.next(), elsewhere.next()]
+
+    assertEq(feed.endAll(), 3)
+
+    for one in parked
+        assertEq((await one).done, true)
+
+    assertEq(feed.count("notes"), 0)
+    assertEq(feed.count("alerts"), 0)
+
+@test
+async THE_LAST_EVENT_GOES_OUT_BEFORE_THE_END_AND_THE_READER_TAKES_BOTH()
+    // **SSE has no goodbye of its own**, so what a client should make of the end is the program's
+    // protocol -- `endAll` sends what it is given and then the stream ends.
+    val feed = hub()
+    val one = feed.subscribe("notes")
+    val waiting = one.next()
+
+    assertEq(feed.endAll({ event: { event: "shutdown", retry: 5000 } }), 1)
+
+    val last = await waiting
+
+    assertEq(last.done, false)
+    assertEq(last.value, { event: "shutdown", retry: 5000 })
+    assertEq((await one.next()).done, true, "and then the stream is over")
+    assertEq(feed.count("notes"), 0)
+
+@test
+async A_BACKLOG_IS_HANDED_OVER_BEFORE_THE_END_RATHER_THAN_DROPPED()
+    // **`ending` and not `closed` is the whole of why the last event arrives**: a closed subscriber
+    // answers `done` with its queue unread, and this one answers what it holds and then `done`.
+    val feed = hub()
+    val one = feed.subscribe("notes")
+
+    feed.publish("notes", "first")
+    feed.publish("notes", "second")
+
+    assertEq(feed.endAll({ event: "last" }), 1)
+
+    assertEq((await one.next()).value, "first")
+    assertEq((await one.next()).value, "second")
+    assertEq((await one.next()).value, "last")
+    assertEq((await one.next()).done, true)
+
+@test
+async A_STREAM_THAT_IS_ENDING_TAKES_NOTHING_NEW()
+    // Queueing onto it would be handing something to a reader that is on its way out, and a value
+    // published after the last event would arrive after it.
+    val feed = hub()
+    val one = feed.subscribe("notes")
+
+    feed.endAll({ event: "last" })
+    feed.publish("notes", "too late")
+
+    assertEq((await one.next()).value, "last")
+    assertEq((await one.next()).done, true)
+
+@test
+async endAll_ON_A_HUB_NOBODY_IS_READING_ENDS_NOTHING()
+    val quiet = hub()
+    val used = hub()
+    val one = used.subscribe("notes")
+
+    one.close()
+
+    assertEq(quiet.endAll(), 0, "a hub no topic was ever named on")
+    assertEq(used.endAll(), 0, "and a topic whose one subscriber had already gone")
+
+@test
+async endAll_TWICE_ENDS_NOTHING_THE_SECOND_TIME()
+    // A signal handler and a `main` that finishes are both entitled to drain, so the second call
+    // must be a number and not a fault.
+    val feed = hub()
+    val one = feed.subscribe("notes")
+    val waiting = one.next()
+
+    assertEq(feed.endAll(), 1)
+    assertEq(feed.endAll(), 0)
+    assertEq((await waiting).done, true)
+
+@test
+async A_SUBSCRIBER_THAT_CLOSED_ITSELF_IS_NOT_ENDED_AGAIN()
+    // `close` is still the program's for a subscription it ends itself, and the two cannot fight.
+    val feed = hub()
+    val one = feed.subscribe("notes")
+    val two = feed.subscribe("notes")
+
+    one.close()
+
+    assertEq(feed.endAll(), 1, "the one still reading")
+    assertEq((await two.next()).done, true)
+    assertEq((await one.next()).done, true)
+
+@test
+async open_IS_EVERY_STREAM_THE_HUB_IS_FEEDING_ACROSS_EVERY_TOPIC()
+    // A drain needs one number and not a list of topics it does not know.
+    val feed = hub()
+
+    assertEq(feed.open(), 0)
+
+    val here = feed.subscribe("notes")
+    val elsewhere = feed.subscribe("alerts")
+
+    assertEq(feed.open(), 2)
+
+    here.close()
+
+    assertEq(feed.open(), 1)
+
+    elsewhere.close()
+
+    assertEq(feed.open(), 0)
+
+@test
+async A_STREAM_STAYS_OPEN_UNTIL_ITS_READER_HAS_TAKEN_THE_END()
+    // **THIS IS WHAT A DRAIN WAITS ON.** `endAll` says the stream is over; the reader has still to
+    // take the last event and then the end of it, and a socket closed in between throws both away.
+    val feed = hub()
+    val one = feed.subscribe("notes")
+
+    feed.endAll({ event: "last" })
+
+    assertEq(feed.open(), 1, "told to end is not ended")
+    assertEq((await one.next()).value, "last")
+    assertEq(feed.open(), 1, "and the last event is not the end either")
+    assertEq((await one.next()).done, true)
+    assertEq(feed.open(), 0, "the end of the stream is what takes it off the topic")

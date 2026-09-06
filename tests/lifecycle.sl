@@ -4,8 +4,25 @@
 // thing a drain does that touches the world is let go of a socket, so `close` is a function the
 // caller may give -- which is also what a server that is more than a socket would need.
 
-import { api, drain, onShutdown, request } from "../sluice.sl"
+import { api, drain, hub, sse, onShutdown, request, response } from "../sluice.sl"
 import { doc, status } from "./support.sl"
+
+// Everything a stream hands over, and `"done"` for the end of it.
+//
+// **A STREAM ENDS WHEN WHOEVER IS READING IT TAKES THE END**, which is what a writer does and what a
+// test that pulls once does not: a drain waits for the streams it ended, so a test holding a source
+// it never reads again is a stalled client and holds the drain exactly as one would.
+async reading(source, log)
+    var step = await source.next()
+
+    while !step.done
+        push(log, step.value)
+
+        step = await source.next()
+
+    push(log, "done")
+
+    null
 
 // An api with one route that answers whatever promise the test settles.
 waiting(gate) -> object
@@ -180,7 +197,7 @@ async drain_ON_ITS_OWN_SERVES_A_PROGRAM_THAT_IS_NOT_AN_api()
 
     val outcome = await drain("the server", { grace: 5000, close: (s) -> push(closed, s) })
 
-    assertEq(outcome, { cut: 0, waited: 0 })
+    assertEq(outcome, { cut: 0, waited: 0, ended: 0 })
     assertEq(closed, ["the server"])
 
 @test
@@ -197,6 +214,140 @@ async A_COUNTER_OF_THE_PROGRAMS_OWN_IS_WHAT_A_DRAIN_WAITS_ON()
         close: (s) -> push(closed, s) })
 
     assertEq(outcome.cut, 0)
+    assertEq(closed, ["the server"])
+
+// -- the event streams a drain has to end --------------------------------------------------------------
+
+@test
+async A_DRAIN_ENDS_EVERY_OPEN_STREAM_BEFORE_IT_LETS_GO_OF_THE_SOCKET()
+    // **AN EVENT STREAM IS NOT A REQUEST IN FLIGHT AND WAITING FOR ONE WOULD BE WAITING FOR EVER.**
+    // `handle` is done with an SSE route the moment it answers the response, so the count reads zero
+    // while the stream is still open -- and `close` then holds the socket for that unfinished
+    // response. So the streams are ended as soon as new work is refused.
+    var closed = []
+    var listening = []
+    val feed = hub()
+    val app = api()
+    val one = feed.subscribe("notes")
+    val parked = one.next()
+
+    closing(s)
+        push(closed, s)
+        push(listening, feed.count("notes"))
+
+    val outcome = await app.drain("the server", { grace: 2000, poll: 1, hubs: [feed], close: closing })
+
+    assertEq(outcome.ended, 1)
+    assertEq(outcome.waited, 0, "and it did not wait its grace out for a stream that never ends")
+    assertEq(closed, ["the server"])
+    assertEq(listening, [0], "the stream had ended before the socket was let go of")
+    assertEq((await parked).done, true, "and whoever was reading it was told")
+
+@test
+async A_DRAIN_TELLS_A_SUBSCRIBER_WITH_A_LAST_EVENT_WHERE_THE_PROGRAM_GAVE_ONE()
+    // SSE has no goodbye of its own, so what a client should make of the end is the program's
+    // protocol -- `farewell` is where it says it, and the event goes out before the stream ends.
+    var closed = []
+    var log = []
+    val feed = hub()
+    val app = api()
+    val one = feed.subscribe("notes")
+    val reader = reading(one, log)
+
+    val outcome = await app.drain("the server", { grace: 2000, poll: 1, hubs: [feed],
+        farewell: { event: "shutdown", data: "back shortly" }, close: (s) -> push(closed, s) })
+
+    await reader
+
+    assertEq(outcome.ended, 1)
+    assert(outcome.waited < 500, "and it waited for the stream to end rather than out its grace")
+    assertEq(log, [{ event: "shutdown", data: "back shortly" }, "done"],
+        "the last event and then the end of the stream")
+    assertEq(feed.count("notes"), 0)
+    assertEq(closed, ["the server"])
+
+@test
+async THE_STREAM_A_ROUTE_ANSWERED_IS_THE_ONE_A_DRAIN_ENDS()
+    // The seam a program actually has: a route answering `sse(feed.subscribe(…))`, and a reader
+    // holding the response body. **What ends is the response**, which is what lets the server close.
+    var closed = []
+    var log = []
+    val feed = hub()
+    val app = api()
+
+    app.get("/events", (req) -> sse(feed.subscribe("notes")))
+
+    val r = response(await app.handle(request("GET", "/events")))
+
+    assertEq(feed.count("notes"), 1)
+
+    val reader = reading(r.body, log)
+
+    val outcome = await app.drain("the server", { grace: 2000, poll: 1, hubs: [feed],
+        farewell: { event: "shutdown", data: "back shortly" }, close: (s) -> push(closed, s) })
+
+    await reader
+
+    assertEq(outcome.ended, 1)
+    assert(contains(log[0], "event: shutdown"), "the last event is written as an event stream")
+    assertEq(log[1], "done", "and the response ends rather than being cut off")
+    assertEq(closed, ["the server"])
+
+@test
+async A_REQUEST_IN_FLIGHT_IS_STILL_WAITED_FOR_WHILE_THE_STREAMS_END()
+    // The two are different things and a drain that confused them would either cut a request off or
+    // wait for ever: the streams go at once, and what is genuinely in hand is waited for.
+    var closed = []
+    val feed = hub()
+    val gate = pending()
+    val app = waiting(gate)
+    val flight = app.handle(request("GET", "/notes"))
+    val one = feed.subscribe("notes")
+    val parked = one.next()
+
+    val stopping = app.drain("the server", { grace: 2000, poll: 1, hubs: [feed],
+        close: (s) -> push(closed, s) })
+
+    assertEq((await parked).done, true, "the stream ended straight away")
+    assertEq(closed, [], "and the socket is still held for the request in flight")
+
+    settle(gate, "the notes")
+
+    val outcome = await stopping
+
+    assertEq(outcome.cut, 0)
+    assertEq(outcome.ended, 1)
+    assertEq(closed, ["the server"])
+    assertEq(await flight, "the notes")
+
+@test
+async A_STREAM_WHOSE_READER_TAKES_NOTHING_IS_BOUNDED_BY_THE_GRACE_LIKE_EVERYTHING_ELSE()
+    // **The grace is the bound on all of it**, streams included: a client that was sent its last
+    // event and never came back for the end of the stream would otherwise hold the socket for ever,
+    // which is the thing this whole option exists to stop.
+    var closed = []
+    val feed = hub()
+    val app = api()
+    val one = feed.subscribe("notes")
+    val parked = one.next()
+
+    val outcome = await app.drain("the server", { grace: 20, poll: 2, hubs: [feed],
+        farewell: "last", close: (s) -> push(closed, s) })
+
+    assertEq(outcome.ended, 1)
+    assert(outcome.waited >= 20, "it waited the grace out")
+    assertEq(closed, ["the server"], "and let go of the socket anyway")
+    assertEq((await parked).value, "last", "the client had been told")
+
+@test
+async A_DRAIN_GIVEN_NO_HUBS_ENDS_NOTHING_AND_IS_WHAT_IT_ALWAYS_WAS()
+    // Most programs have no hub at all, and the option is absent rather than empty for them.
+    var closed = []
+    val app = api()
+
+    val outcome = await app.drain("the server", { grace: 100, poll: 1, close: (s) -> push(closed, s) })
+
+    assertEq(outcome.ended, 0)
     assertEq(closed, ["the server"])
 
 // -- the signals that begin one ------------------------------------------------------------------------

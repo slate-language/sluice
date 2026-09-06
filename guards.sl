@@ -243,20 +243,50 @@ listed(v) -> string = if v is array then join(v, ", ") else string(v)
 // `logger(sink)` -- call `sink` with what happened, once the answer is known.
 //
 // **The sink is given a record and not a line of text**, so a program can print it, count it, or
-// send it somewhere structured without this package deciding which. `{ method, path, status, ms }`.
+// send it somewhere structured without this package deciding which.
+// `{ method, path, status, ms, address }`.
 //
 // **`id` is on the record wherever the request has one**, which is what `requestId` puts there --
 // and it is the member that turns a log into something a person can follow one request through. It
 // is absent rather than `null` where nothing set it: a record whose fields depend on which guards
 // ran is one a reader can take at face value, and slate will not store an absence anyway.
 //
+// **`address` IS THE SAME FACT `rateLimit` KEYS ON, AND FOR THE SAME REASON.** `req.address` --
+// slate 0.0.30's peer of the socket -- is the one thing about a client the client did not choose;
+// `x-forwarded-for` is text anybody may write, so it is trusted only where `trustProxy` says
+// something in front of this server sets it, and there only its first hop, the proxy having
+// appended the peer it saw to whatever it was given.
+//
 // **A handler that faults is not logged here**, and that is deliberate rather than an oversight: the
 // fault carries on up to `handle`, which answers the `500` and puts the fault back. A guard that
 // swallowed it to log it would be deciding on the program's behalf that a defect is a log line.
-export loggerGuard(sink: function) -> object =
-    guard("logger", (h) -> logged(sink, h))
+export loggerGuard(sink: function, options: object = {}) -> object =
+    guard("logger", (h) -> logged(sink, options, h))
 
-logged(sink, h)
+// The address a request is logged under: the first hop of `x-forwarded-for` where `trustProxy` says
+// a proxy in front of this server wrote it, the peer of the socket otherwise.
+loggedAddress(req, trustProxy: boolean) -> string | null
+    if trustProxy
+        val forwarded = firstHop(headerOf(req, "x-forwarded-for"))
+
+        if forwarded != null then return forwarded
+
+    if has(req, "address") && req.address != null then return string(req.address)
+
+    null
+
+// The first non-blank entry of a comma-separated header, or `null`.
+firstHop(value) -> string | null
+    if value == null then return null
+
+    for one in split(value, ",")
+        if trim(one) != "" then return trim(one)
+
+    null
+
+logged(sink, options, h)
+    val trustProxy = options.trustProxy ?? false
+
     async inner(req)
         val started = monotonic()
         val reply = await h(req)
@@ -264,7 +294,8 @@ logged(sink, h)
         var record = { method: req.method,
                        path: req.path,
                        status: asResponse(reply).status,
-                       ms: (monotonic() - started).millis() }
+                       ms: (monotonic() - started).millis(),
+                       address: loggedAddress(req, trustProxy) }
 
         if has(req, "id") then record["id"] = req.id
 

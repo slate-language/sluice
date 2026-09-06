@@ -21,10 +21,10 @@ import { onSignal, offSignal } from slate:process
 
 // `drain(server, options)` -- stop taking requests, let what is in hand finish, then close.
 //
-// **It answers what happened rather than nothing**: `{ cut, waited }`, where `cut` is how many
-// requests were still running when the grace ran out and `waited` is how long it took. A shutdown
-// that regularly cuts requests off is a grace that is too short or a handler that is too slow, and
-// neither is visible unless the number is.
+// **It answers what happened rather than nothing**: `{ cut, waited, ended }`, where `cut` is how
+// many requests were still running when the grace ran out, `waited` is how long it took, and `ended`
+// is how many event streams were ended. A shutdown that regularly cuts requests off is a grace that
+// is too short or a handler that is too slow, and neither is visible unless the number is.
 //
 // **The seams are the two things that touch the world**: `close` is what actually lets go of the
 // socket, and `inflight` is what says how many requests are still running. Both are options because
@@ -39,29 +39,65 @@ import { onSignal, offSignal } from slate:process
 // | `stop` | called first, to stop taking new ones |
 // | `close` | what closing the server means. `slate:http`'s `close` |
 // | `poll` | how often to look, in milliseconds. `10` |
+// | `hubs` | the event hubs whose streams to end, so that closing does not wait on them |
+// | `farewell` | a last event published to every topic of those hubs before their streams end |
 export async drainServer(server, options: object)
     val grace = options.grace ?? 10000
     val poll = options.poll ?? 10
     val inflight = options.inflight ?? none
     val stop = options.stop ?? null
     val closing = options.close ?? shutSocket
+    val hubs = options.hubs ?? []
+    val farewell = options.farewell ?? null
 
     // **Refusing comes first and closing comes last**, with the waiting in between: a request that
     // arrives while this is waiting would otherwise extend the wait it is inside.
     if stop != null then stop()
 
-    var waited = 0
-    var left = inflight()
+    // **AN EVENT STREAM IS NOT A REQUEST IN FLIGHT AND WAITING FOR ONE WOULD BE WAITING FOR EVER**,
+    // which is why the hubs are ended here rather than counted above. `handle` is done with an SSE
+    // route the moment it answers the response, so the count reads zero while the stream is still
+    // open -- and then `close` holds the socket for that unfinished response until it ends or the
+    // connection times out. So the streams are ended right after new work is refused: a subscriber
+    // is told the stream is over, its browser reconnects to whatever is taking traffic by then, and
+    // the requests genuinely in hand are still waited for below.
+    val ending = {}
 
-    while left > 0 && waited < grace
+    if farewell != null then ending.event = farewell
+
+    var ended = 0
+
+    for feed in hubs
+        ended = ended + feed.endAll(ending)
+
+    // **A STREAM THAT HAS BEEN TOLD TO END HAS NOT ENDED YET**, and closing the socket under it
+    // throws away the last event that was the whole point of sending one. So an ended stream is
+    // waited for exactly as a request in hand is, under the same grace: it leaves its hub when its
+    // reader has taken the end of the stream, and `open` is what says so.
+    streaming() -> integer
+        var live = 0
+
+        for feed in hubs
+            live = live + feed.open()
+
+        live
+
+    // **`inflight` is asked once a turn and no more**, a program's own counter being free to be
+    // anything -- so the two numbers are kept apart rather than added up and read again at the end.
+    var waited = 0
+    var running = inflight()
+    var live = streaming()
+
+    while running + live > 0 && waited < grace
         await sleep(poll)
 
         waited = waited + poll
-        left = inflight()
+        running = inflight()
+        live = streaming()
 
     closing(server)
 
-    { cut: left, waited: waited }
+    { cut: running, waited: waited, ended: ended }
 
 // What `inflight` answers where nobody said. **Zero and not an error**: a program draining a server
 // it has no counter for is asking for `close` with the connections given a moment to finish, which
