@@ -484,6 +484,24 @@ problem. The comparison is `slate:crypto`'s `timingSafeEqual`. `options` takes `
 **This is the one cookie deliberately not `HttpOnly`**, and the whole double-submit argument rests on
 it: a page has to be able to read the token to send it back.
 
+## Upgrading from 0.5.0
+
+**No floor change — three fixes.** **`overHttps` now reads `x-forwarded-proto` only under
+`trustProxy`**, the same rule `rateLimit` already applied to `req.address`: without it, any client
+could set the header itself, forcing a session cookie's `secure` off over a connection that really is
+TLS and on over one that is not. A server behind a proxy still wants `session({ trustProxy: true })`;
+one with no proxy in front sees the header ignored rather than trusted.
+
+**The `logger` guard's record gains `address`**, so `sink({ method, path, status, ms, address })` is
+what a program's sink is handed and a request log line names who made the request without reaching
+into `req` on its own.
+
+**`drain` now ends the event streams it would otherwise hold a socket open for.** `drain(server, {
+hubs, farewell })` calls `endAll` on every hub named in `hubs` once new work is refused — publishing
+`farewell` as each open stream's last event first, where one is given — and the object it answers
+gains `ended`, the count of streams that were, beside `cut` and `waited`. A program with no `hubs` to
+name sees nothing change.
+
 ## Upgrading from 0.4.1
 
 **The floor is slate 0.0.35**, which removed the global `len(x)` and the `.len()` method alias in
