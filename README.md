@@ -464,6 +464,12 @@ problem. The comparison is `slate:crypto`'s `timingSafeEqual`. `options` takes `
 **This is the one cookie deliberately not `HttpOnly`**, and the whole double-submit argument rests on
 it: a page has to be able to read the token to send it back.
 
+## Upgrading from 0.4.1
+
+**The floor is slate 0.0.35**, which removed the global `len(x)` and the `.len()` method alias in
+favour of the `.length` property. This package had no call sites of either; the bump moves the
+`logger` and `pg` dev dependencies to their own 0.0.35-floor releases, 0.2.0 and 0.5.0.
+
 ## Upgrading from 0.4.0
 
 **The media type in `multipart`'s `415` moved from `type` to `mediaType`, and that is a fix rather
@@ -725,13 +731,13 @@ what `api.failures(Failure, …)` on this page is; 0.0.27 let `slate:http` take 
 that repeats, which is how a login writes two cookies; 0.0.29 gave `slate:url` the
 `base64urlEncode`/`base64urlDecode` every signature and session id on this page is written in, and a
 streamed response the ability to tell its source that its reader has gone, which is what stops an
-event stream leaking a subscriber per browser tab. **0.0.30 is the floor now, and it is two members
-of the request**: `req.bytes`, which is what lets `multipart` read an upload that is not text, and
+event stream leaking a subscriber per browser tab. 0.0.30 raised the floor for two members
+of the request: `req.bytes`, which is what lets `multipart` read an upload that is not text, and
 `req.address`, which is who `rateLimit` counts. `without` is in here too — `memoryStore` deletes with
 it — but that one is a simplification and not a floor.
 
-**[logger](https://github.com/slate-language/logger) 0.1.0 and
-[pg](https://github.com/slate-language/pg) 0.3.0 are DEV dependencies**, used by the examples and by
+**[logger](https://github.com/slate-language/logger) 0.2.0 and
+[pg](https://github.com/slate-language/pg) 0.5.0 are DEV dependencies**, used by the examples and by
 four test files. Installing `sluice` installs neither: a package's own `devDependencies` are resolved
 only when that package is the project being built, so nothing this framework puts on a machine
 carries a logger or a database client it did not ask for.

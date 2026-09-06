@@ -1,6 +1,6 @@
 {
     name: "sluice",
-    version: "0.4.1",
+    version: "0.5.0",
 
     // The whole package is one door. `route.sl`, `problem.sl`, `guards.sl` and `testing.sl` are
     // reached from here and are deliberately not listed under `modules` -- what a consumer imports
@@ -20,7 +20,7 @@
     // fit. `pg` is what `examples/tasks/` is written over, and `tests/tasks.sl` and
     // `tests/postgres.sl` are what keep it honest.
     devDependencies: {
-        logger: { git: "github.com/slate-language/logger", version: "0.1.0" },
-        pg: { git: "github.com/slate-language/pg", version: "0.3.0" },
+        logger: { git: "github.com/slate-language/logger", version: "0.2.0" },
+        pg: { git: "github.com/slate-language/pg", version: "0.5.0" },
     },
 }
