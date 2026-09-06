@@ -174,21 +174,33 @@ expiryOf(options: object) =
 //
 // **`Secure` follows the REQUEST rather than being on always**, because a session that refused to
 // work over `http://localhost` would be a session nobody could develop against -- and a server
-// behind a proxy reads `x-forwarded-proto`, which is the header that carries the answer.
+// behind a proxy reads `x-forwarded-proto`, which is the header that carries the answer. **`slate:http`
+// never learns whether a connection was TLS** -- `listen` decrypts before `serve` sees a byte -- so a
+// forwarded header is the only source of the answer, which is exactly why it may not be trusted by
+// default: `trustProxy` is the same guard rateLimit's `clientKey` already has, and `secure` reads the
+// header only where it is set. A server terminating TLS itself, with nothing in front of it to read a
+// header from, says so by passing `{ secure: true }` -- the same "the host is an option" seam every
+// operational guard uses -- and that passes straight through the loop below.
 cookieOptions(options: object, req: object) -> object
-    var out = { httpOnly: true, sameSite: "Lax", path: "/", secure: overHttps(req) }
+    val trustProxy = options.trustProxy ?? false
+    var out = { httpOnly: true, sameSite: "Lax", path: "/", secure: overHttps(req, trustProxy) }
 
-    // **`name` and `store` are this guard's own and everything else is the cookie's**, which is what
-    // makes `options` one object rather than two: a member `setCookie` knows about is passed
-    // straight through, so a cookie attribute this package has never heard of works on the day
+    // **`name`, `store` and `trustProxy` are this guard's own and everything else is the cookie's**,
+    // which is what makes `options` one object rather than two: a member `setCookie` knows about is
+    // passed straight through, so a cookie attribute this package has never heard of works on the day
     // `slate:http` grows it.
     for [k, v] in entries(options)
-        if k != "name" && k != "store" then out[k] = v
+        if k != "name" && k != "store" && k != "trustProxy" then out[k] = v
 
     out
 
-overHttps(req: object) -> boolean =
-    (req.headers["x-forwarded-proto"] ?? "") == "https"
+// **Reads the forwarded header only where `trustProxy` says a proxy in front of this server writes
+// it.** Without that, any client could set `x-forwarded-proto` itself -- forcing `Secure` on over a
+// plain connection is merely a session that stops working, but forcing it OFF on a connection that
+// really is TLS is a cookie the request goes on to leak in the clear. `A_FORWARDED_HEADER_IS_NOT_AN_IDENTITY_UNTIL_trustProxy_SAYS_SO`
+// in `tests/ratelimit.sl` is the same shape of bypass, for `req.address` rather than for the scheme.
+overHttps(req: object, trustProxy: boolean) -> boolean =
+    trustProxy && (req.headers["x-forwarded-proto"] ?? "") == "https"
 
 // What a cookie says, if it says anything this secret signed.
 //
@@ -258,6 +270,7 @@ export csrfGuard(options: object = {}) -> object =
 checked(options: object, h)
     val name = options.name ?? "csrf"
     val header = (options.header ?? "x-csrf-token").lower()
+    val trustProxy = options.trustProxy ?? false
 
     async inner(req)
         val held = req.cookies[name] ?? null
@@ -283,7 +296,7 @@ checked(options: object, h)
         if held != null then return reply
 
         withHeaders(reply, { "Set-Cookie": setCookie(name, base64urlEncode(randomBytes(32)),
-            { httpOnly: false, sameSite: "Lax", path: "/", secure: overHttps(req) }) })
+            { httpOnly: false, sameSite: "Lax", path: "/", secure: overHttps(req, trustProxy) }) })
 
     inner
 

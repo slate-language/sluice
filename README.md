@@ -379,9 +379,12 @@ cookie is good until it expires, so `maxAge` is the only way to end one early an
 does not log anybody out. Both of those are what a store buys.
 
 **The defaults are the safe ones and every one is overridable** — `httpOnly`, `sameSite: "Lax"`,
-`path: "/"`, and `secure` where the request arrived over https, which follows `x-forwarded-proto`
-rather than being on always, or a session would not work over `http://localhost`. `options` also
-takes `name` (`"session"`), `store`, `maxAge` in seconds, and anything else `slate:http`'s
+`path: "/"`, and `secure` where the request arrived over https, or a session would not work over
+`http://localhost`. **`slate:http` never learns whether a connection was TLS**, so that reads
+`x-forwarded-proto` — and only where `trustProxy: true` says a proxy in front of this server writes
+it, the same guard `rateLimit`'s address reading has. A server terminating TLS itself, with no proxy
+in front to read a header from, says so directly with `secure: true`. `options` also takes `name`
+(`"session"`), `store`, `trustProxy`, `maxAge` in seconds, and anything else `slate:http`'s
 `setCookie` takes.
 
 ### A session in a store

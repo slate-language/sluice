@@ -227,7 +227,10 @@ async THE_DEFAULTS_ARE_THE_SAFE_ONES_AND_EVERY_ONE_IS_OVERRIDABLE()
     // nobody could develop against one.
     assert(!contains(plain, "Secure"))
 
-    val safe = cookies(await made(Secret).handle(
+    // **The forwarded header only counts behind a trusted proxy.** See
+    // `A_FORWARDED_HEADER_IS_NOT_AN_IDENTITY_UNTIL_trustProxy_SAYS_SO_FOR_https_TOO`, just below, for
+    // the direction this exercises and the direction it must not.
+    val safe = cookies(await made(Secret, { trustProxy: true }).handle(
         request("POST", "/in", { body: "1", headers: { "x-forwarded-proto": "https" } })))[0]
 
     assert(contains(safe, "Secure"))
@@ -237,6 +240,44 @@ async THE_DEFAULTS_ARE_THE_SAFE_ONES_AND_EVERY_ONE_IS_OVERRIDABLE()
 
     assert(contains(named, "sid="))
     assert(contains(named, "SameSite=Strict"))
+
+@test
+async A_FORWARDED_HEADER_IS_NOT_AN_IDENTITY_UNTIL_trustProxy_SAYS_SO_FOR_https_TOO()
+    // **`slate:http` never learns whether a connection was TLS** -- `listen` decrypts before `serve`
+    // sees a byte -- so `x-forwarded-proto` is the only source `overHttps` has, and it must not be
+    // trusted by default: a client on a plain connection can write any header it likes. Forcing
+    // `Secure` on over plain http is merely a session that stops working; the dangerous direction is
+    // a header forcing it OFF over a connection that really is TLS, which is exactly what having no
+    // gate at all could not distinguish from this.
+    val trusted = cookies(await made(Secret, { trustProxy: true }).handle(
+        request("POST", "/in", { body: "1", headers: { "x-forwarded-proto": "https" } })))[0]
+
+    assert(contains(trusted, "Secure"))
+
+    // **The default is `trustProxy: false`**, so the same header on the same plain connection is
+    // nobody's proxy speaking and counts for nothing.
+    val untrusted = cookies(await made(Secret).handle(
+        request("POST", "/in", { body: "1", headers: { "x-forwarded-proto": "https" } })))[0]
+
+    assert(!contains(untrusted, "Secure"))
+
+@test
+async A_SERVER_TERMINATING_TLS_ITSELF_SAYS_SO_WITH_secure_true()
+    // **There is no proxy to read a header from here, and `slate:http` still cannot say whether the
+    // connection was TLS** -- so a server with a certificate of its own tells this guard directly,
+    // the same "the host is an option" seam `rateLimit`'s `now` and `drain`'s `close` already are.
+    // `secure: true` passes straight through `cookieOptions`'s loop and wins over the computed
+    // default regardless of `trustProxy`, which is what "either way" means: a request with no
+    // forwarded header and no trusted proxy is still marked `Secure` because the operator said so.
+    val onWithoutProxy = cookies(await made(Secret, { secure: true }).handle(
+        request("POST", "/in", { body: "1" })))[0]
+
+    assert(contains(onWithoutProxy, "Secure"))
+
+    val onWithTrustedProxy = cookies(await made(Secret, { secure: true, trustProxy: true }).handle(
+        request("POST", "/in", { body: "1" })))[0]
+
+    assert(contains(onWithTrustedProxy, "Secure"))
 
 // -- two cookies in one response --------------------------------------------------------------------
 
