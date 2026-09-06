@@ -42,7 +42,7 @@ export stack(guards: array) -> object
 // The guards composed: `compose([a, b], h)` is `a(b(h))`.
 export compose(guards: array, h)
     var composed = h
-    var i = len(guards) - 1
+    var i = guards.length - 1
 
     while i >= 0
         val g = guards[i]
@@ -144,7 +144,7 @@ export makeApi(options: object) -> object
 
         val wrappers = if h is object && has(h, "wrappers") then h.wrappers else []
         var out = mapped(deepestOf(h))
-        var i = len(wrappers) - 1
+        var i = wrappers.length - 1
 
         while i >= 0
             out = mapped(wrappers[i](out))
@@ -196,7 +196,7 @@ export makeApi(options: object) -> object
         var allowed = []
         var i = 0
 
-        while i < len(routes)
+        while i < routes.length
             val r = routes[i]
             val bound = fit(r.parts, want)
 
@@ -295,7 +295,7 @@ export makeApi(options: object) -> object
         if found.route == null
             // **A path that is there under another method is `405` and not `404`**, and the
             // difference is what tells a client to change what it sent rather than give up.
-            if len(found.allowed) != 0 then return refused(ready, found.allowed)
+            if found.allowed.length != 0 then return refused(ready, found.allowed)
 
             if fallback != null then return await settled(ready, fallback)
 

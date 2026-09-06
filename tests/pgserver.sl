@@ -84,11 +84,11 @@ joined(answer, sock)
         // **The startup packet has no tag**, so it is read by length before the framed reader takes
         // over. Everything after it is an ordinary tagged message.
         if !started
-            if len(held) < 4 then return
+            if held.length < 4 then return
 
             val size = sizeAt(held, 0)
 
-            if len(held) < size then return
+            if held.length < size then return
 
             // **The SSLRequest arrives BEFORE the startup packet and is shaped like one**: eight
             // bytes, a length and a magic number where a protocol version goes. It is answered with
@@ -116,11 +116,11 @@ joined(answer, sock)
             putBytes(held, rest)
 
         while true
-            if len(held) < 5 then return
+            if held.length < 5 then return
 
             val size = sizeAt(held, 1)
 
-            if len(held) < size + 1 then return
+            if held.length < size + 1 then return
 
             val tag = fromBytes([held[0]]).value
             val body = held[5..<(size + 1)]
@@ -152,7 +152,7 @@ replyTo(said: object, extended: boolean) -> array
     // **A statement with no columns sends `NoData` and not an empty `RowDescription`**, which is
     // what a real server does for an `insert` with no `returning` -- and what a client has to be
     // able to step over.
-    if len(fields) == 0
+    if fields.length == 0
         if extended then putBytes(out, noData())
     else
         putBytes(out, describe(fields))
@@ -172,7 +172,7 @@ framed(tag: string, body: array) -> array
     var out = []
 
     putBytes(out, toBytes(tag))
-    putInt32(out, len(body) + 4)
+    putInt32(out, body.length + 4)
     putBytes(out, body)
 
     out
@@ -213,7 +213,7 @@ readyFor(state: string) -> array
 describe(fields: array) -> array
     var body = []
 
-    putInt16(body, len(fields))
+    putInt16(body, fields.length)
 
     for f in fields
         putText(body, f.name)
@@ -231,7 +231,7 @@ describe(fields: array) -> array
 dataRow(values: array) -> array
     var body = []
 
-    putInt16(body, len(values))
+    putInt16(body, values.length)
 
     for v in values
         if v == null
@@ -239,7 +239,7 @@ dataRow(values: array) -> array
         else
             val bs = toBytes(v)
 
-            putInt32(body, len(bs))
+            putInt32(body, bs.length)
             putBytes(body, bs)
 
     framed("D", body)
@@ -336,7 +336,7 @@ reader(bs: array) -> object
     text() -> string
         var end = at
 
-        while end < len(bs) && bs[end] != 0
+        while end < bs.length && bs[end] != 0
             end = end + 1
 
         val out = fromBytes(bs[at..<end]).value
@@ -345,6 +345,6 @@ reader(bs: array) -> object
 
         out
 
-    left() -> integer = len(bs) - at
+    left() -> integer = bs.length - at
 
     { int32: int32, int16: int16, bytes: bytes, text: text, left: left }

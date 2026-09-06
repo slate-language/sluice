@@ -251,7 +251,7 @@ text:
 
 ```slate
 for f in req.form.files
-    print(f.filename, len(f.bytes), f.text() ?? "(not text)")
+    print(f.filename, f.bytes.length, f.text() ?? "(not text)")
 ```
 
 **`text` is a function and `bytes` is never sometimes a string**, which is the decision `slate:http`

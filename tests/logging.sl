@@ -23,7 +23,7 @@ async THE_GUARDS_RECORD_GOES_STRAIGHT_INTO_THE_LOGGING_PACKAGE()
 
     assertEq(await app.handle(request("GET", "/notes/7")), "note 7")
 
-    assertEq(len(written), 1)
+    assertEq(written.length, 1)
     assertEq(written[0].level, "info")
     assertEq(written[0].message, "request")
     assertEq(written[0].method, "GET")

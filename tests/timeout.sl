@@ -84,7 +84,7 @@ async A_HANDLER_THAT_FAULTS_TOO_LATE_IS_REPORTED_RATHER_THAN_LOST()
 
     await sleep(60)
 
-    assertEq(len(late), 1)
+    assertEq(late.length, 1)
     assertEq(late[0].ok, false)
     assertEq(late[0].error.message, "the note store went away")
     assertEq(caught, null, "and it is not the 500 of a request that has already been answered")

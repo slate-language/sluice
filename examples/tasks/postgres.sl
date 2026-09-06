@@ -74,7 +74,7 @@ store(db: object) -> object
 
         val rows = r.value.rows
 
-        { ok: true, value: if len(rows) == 0 then null else rows[0] }
+        { ok: true, value: if rows.length == 0 then null else rows[0] }
 
     async remove(id: integer)
         val r = await db.query("delete from tasks where id = $1", id)

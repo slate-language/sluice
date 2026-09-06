@@ -77,7 +77,7 @@ export makeHub(options: object = {}) -> object
 
         push(held.ring, event)
 
-        if len(held.ring) > keep then held.ring = held.ring[1..]
+        if held.ring.length > keep then held.ring = held.ring[1..]
 
         event
 
@@ -138,7 +138,7 @@ export makeHub(options: object = {}) -> object
         async pull()
             if one.closed then return { done: true, value: null }
 
-            if len(one.queue) > 0
+            if one.queue.length > 0
                 val head = one.queue[0]
 
                 one.queue = one.queue[1..]
@@ -179,7 +179,7 @@ export makeHub(options: object = {}) -> object
     //
     // **It is here for the tests and for an operator**, and it is the only way to say a subscriber
     // was let go: a hub that leaked one would look exactly like a hub that did not.
-    count(topic: string) -> integer = len(listeners(topic))
+    count(topic: string) -> integer = listeners(topic).length
 
     { publish: publish, subscribe: subscribe, count: count }
 
@@ -234,7 +234,7 @@ numbered(raw) -> integer | null
 enqueue(one: object, value)
     push(one.queue, value)
 
-    if len(one.queue) > one.bound
+    if one.queue.length > one.bound
         one.queue = one.queue[1..]
         one.dropped = one.dropped + 1
 

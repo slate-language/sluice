@@ -89,10 +89,10 @@ formed(options, h)
         val raw = bytesOf(req)
 
         // **The count is the byte array's own length**, which is what the socket carried. It was
-        // `len(toBytes(req.body))` while this read text, and that answered `0` for exactly the
+        // `toBytes(req.body).length` while this read text, and that answered `0` for exactly the
         // bodies a limit is there for: a binary upload decoded to nothing, so nothing was over the
         // limit and the ceiling held only for text.
-        val size = len(raw)
+        val size = raw.length
 
         if size > ceiling
             return problemResponse(413, "Content Too Large",
@@ -166,7 +166,7 @@ export parseMultipart(raw: array, boundary: string) -> object
     val delimiter = toBytes("--" + boundary)
     val skips = skipTable(delimiter)
     val blanks = skipTable(Blank)
-    val width = len(delimiter)
+    val width = delimiter.length
 
     var at = findBytes(raw, delimiter, skips, 0)
 
@@ -177,7 +177,7 @@ export parseMultipart(raw: array, boundary: string) -> object
 
     while at != null
         val next = findBytes(raw, delimiter, skips, at + width)
-        val piece = slice(raw, at + width, next ?? len(raw))
+        val piece = slice(raw, at + width, next ?? raw.length)
 
         // **`--` after the delimiter closes the body**, and everything after it is an epilogue.
         if opens(piece, Dashes) then return { ok: true, value: { fields: fields, files: files } }
@@ -191,7 +191,7 @@ export parseMultipart(raw: array, boundary: string) -> object
         // uploaded file.
         if !closes(part, Break) then return failed("a part does not end with a line break")
 
-        val whole = slice(part, 0, len(part) - 2)
+        val whole = slice(part, 0, part.length - 2)
         val blank = findBytes(whole, Blank, blanks, 0)
 
         if blank == null then return failed("a part has no blank line after its headers")
@@ -243,11 +243,11 @@ textOf(bs: array) -> string | null
 failed(why: string) -> object = { ok: false, error: why }
 
 opens(bs: array, prefix: array) -> boolean
-    if len(bs) < len(prefix) then return false
+    if bs.length < prefix.length then return false
 
     var i = 0
 
-    while i < len(prefix)
+    while i < prefix.length
         if bs[i] != prefix[i] then return false
 
         i = i + 1
@@ -255,12 +255,12 @@ opens(bs: array, prefix: array) -> boolean
     true
 
 closes(bs: array, suffix: array) -> boolean
-    if len(bs) < len(suffix) then return false
+    if bs.length < suffix.length then return false
 
     var i = 0
 
-    while i < len(suffix)
-        if bs[len(bs) - len(suffix) + i] != suffix[i] then return false
+    while i < suffix.length
+        if bs[bs.length - suffix.length + i] != suffix[i] then return false
 
         i = i + 1
 
@@ -282,7 +282,7 @@ closes(bs: array, suffix: array) -> boolean
 // out of the table on purpose**: it is the one being compared, and giving it a skip of its own would
 // stop the search advancing at all where it matches and the rest does not.
 skipTable(needle: array) -> array
-    val width = len(needle)
+    val width = needle.length
     var table = []
     var i = 0
 
@@ -302,8 +302,8 @@ skipTable(needle: array) -> array
 
 // Where `needle` next appears in `hay` at or after `from`, or `null`.
 findBytes(hay: array, needle: array, skips: array, from: integer) -> integer | null
-    val width = len(needle)
-    val end = len(hay) - width
+    val width = needle.length
+    val end = hay.length - width
 
     if width == 0 then return null
 
@@ -351,10 +351,10 @@ export parameters(value: string) -> object
     var seen = false
     var i = 0
 
-    while i <= len(value)
+    while i <= value.length
         // **The end of the text is a separator too**, which is what saves writing the last parameter
         // out again after the loop.
-        val c = if i == len(value) then ";" else value[i..<(i + 1)]
+        val c = if i == value.length then ";" else value[i..<(i + 1)]
 
         if quoted
             if c == "\""

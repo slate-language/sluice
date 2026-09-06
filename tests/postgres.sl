@@ -121,7 +121,7 @@ async THE_STORE_MAKES_ITS_TABLE_ON_THE_WAY_IN()
 
     // **No parameters, so it went as a simple `Query`** -- which is the only protocol that may carry
     // several statements, and the one a schema wants.
-    assertEq(len(seen[0].params), 0)
+    assertEq(seen[0].params.length, 0)
 
     shut(open)
     clearTimeout(guard)
@@ -138,7 +138,7 @@ async A_LISTING_READS_ITS_COLUMNS_AS_THE_TYPES_THE_SERVER_NAMED()
     val r = await open.made.value.list()
 
     assert(r.ok)
-    assertEq(len(r.value), 2)
+    assertEq(r.value.length, 2)
     assertEq(r.value[0].id, 1)
     assertEq(r.value[0].title, "write the example")
     assertEq(r.value[0].done, true)
@@ -165,7 +165,7 @@ async A_TITLE_CROSSES_AS_A_PARAMETER_AND_NEVER_AS_SQL()
     assert(r.ok)
     assertEq(r.value.id, 7)
 
-    val sent = seen[len(seen) - 1]
+    val sent = seen[seen.length - 1]
 
     assert(contains(sent.sql, "values ($1)"))
     assert(!contains(sent.sql, "drop table"))
@@ -208,7 +208,7 @@ async AN_UPDATE_THAT_MATCHED_NOTHING_ANSWERS_null_RATHER_THAN_A_REFUSAL()
 
     assert(r.ok)
     assertEq(r.value, null)
-    assertEq(seen[len(seen) - 1].params, ["99"])
+    assertEq(seen[seen.length - 1].params, ["99"])
 
     shut(open)
     clearTimeout(guard)
@@ -245,7 +245,7 @@ async THE_HEALTH_PING_IS_A_ROUND_TRIP_AND_A_SERVER_THAT_REFUSES_IS_NOT_WELL()
     val well = await opened(OneTask, seen)
 
     assert((await well.made.value.ping()).ok)
-    assertEq(seen[len(seen) - 1].sql, "select 1 as up")
+    assertEq(seen[seen.length - 1].sql, "select 1 as up")
 
     shut(well)
 
@@ -310,11 +310,11 @@ async THE_APPLICATION_ANSWERS_HTTP_OVER_A_SOCKET_TO_THE_DATABASE()
     assertEq(status(put), 201)
     assertEq(doc(put).id, 1)
     assertEq(doc(put).done, false)
-    assertEq(seen[len(seen) - 1].params, ["write the example"])
+    assertEq(seen[seen.length - 1].params, ["write the example"])
 
     // And the health check really asks the database.
     assertEq(status(await app.handle(request("GET", "/health"))), 200)
-    assertEq(seen[len(seen) - 1].sql, "select 1 as up")
+    assertEq(seen[seen.length - 1].sql, "select 1 as up")
 
     shut(open)
     clearTimeout(guard)

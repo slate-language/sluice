@@ -77,7 +77,7 @@ memory(options: object = {}) -> object
 
         { ok: true }
 
-    { list: list, add: add, done: done, remove: remove, ping: ping, asked: () -> len(rows) }
+    { list: list, add: add, done: done, remove: remove, ping: ping, asked: () -> rows.length }
 
 // The application, with a sink that keeps what it was told rather than printing it.
 made(store: object, log: array) -> object =
@@ -138,7 +138,7 @@ async A_LOGIN_ANSWERS_A_COOKIE_AND_THE_TASKS_ARE_THEN_READABLE()
     val r = await app.handle(carrying(cookie, "GET", "/tasks"))
 
     assertEq(status(r), 200)
-    assertEq(len(listed(r)), 0)
+    assertEq(listed(r).length, 0)
 
 @test
 async LOGGING_OUT_ENDS_THE_SESSION()
@@ -165,7 +165,7 @@ async A_TASK_IS_MADE_AND_COMES_BACK_IN_THE_LIST()
 
     val all = await app.handle(carrying(cookie, "GET", "/tasks"))
 
-    assertEq(len(listed(all)), 1)
+    assertEq(listed(all).length, 1)
     assertEq(listed(all)[0].id, doc(put).id)
 
 @test
@@ -175,7 +175,7 @@ async A_BODY_THAT_DOES_NOT_FIT_IS_A_400_CARRYING_THE_REASON()
     val r = await app.handle(carrying(cookie, "POST", "/tasks", { name: "the wrong member" }))
 
     assertEq(status(r), 400)
-    assert(len(doc(r).mismatch) > 0)
+    assert(doc(r).mismatch.length > 0)
 
 @test
 async A_TITLE_THE_STORE_REFUSES_WITH_23505_IS_A_409_AND_NOT_A_503()
@@ -217,7 +217,7 @@ async THE_LOG_REPORTS_THE_STATUS_THE_CLIENT_WAS_GIVEN_AND_NOT_A_200()
     val again = await app.handle(carrying(cookie, "POST", "/tasks", { title: "write the example" }))
 
     assertEq(status(again), 409)
-    assertEq(log[len(log) - 1].status, 409)
+    assertEq(log[log.length - 1].status, 409)
 
 @test
 async FINISHING_A_TASK_ANSWERS_IT_DONE()
@@ -295,7 +295,7 @@ async THE_HEALTH_CHECK_RUNS_UNDER_NO_GUARDS_AND_NEEDS_NO_SESSION()
     val app = made(memory(), log)
 
     assertEq(status(await app.handle(request("GET", "/health"))), 200)
-    assertEq(len(log), 0)
+    assertEq(log.length, 0)
 
 // -- what the operational guards do -----------------------------------------------------------------
 
@@ -307,9 +307,9 @@ async EVERY_ANSWER_CARRIES_A_REQUEST_ID_AND_THE_LOG_RECORD_SAYS_IT()
     val r = await app.handle(carrying(cookie, "GET", "/tasks"))
 
     assert(header(r, "x-request-id") != null)
-    assertEq(log[len(log) - 1].id, header(r, "x-request-id"))
-    assertEq(log[len(log) - 1].status, 200)
-    assertEq(log[len(log) - 1].path, "/tasks")
+    assertEq(log[log.length - 1].id, header(r, "x-request-id"))
+    assertEq(log[log.length - 1].status, 200)
+    assertEq(log[log.length - 1].path, "/tasks")
 
 @test
 async A_ROUTE_SAYS_WHICH_GUARDS_IT_RUNS_UNDER()

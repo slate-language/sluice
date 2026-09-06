@@ -28,7 +28,7 @@ async A_REQUEST_THAT_ARRIVED_WITH_NO_ID_IS_GIVEN_ONE()
 
     // **22 characters, which is 16 bytes in base64url** -- the same randomness the hex spelling
     // carried in 32, on a value written into a header on every answer and into every log line.
-    assertEq(len(id), 22)
+    assertEq(id.length, 22)
     assertEq(header(r, "x-request-id"), id)
 
 @test
@@ -70,7 +70,7 @@ async AN_ID_CARRYING_A_LINE_BREAK_IS_REPLACED_RATHER_THAN_ECHOED()
     val r = await app.handle(request("GET", "/notes",
         { headers: { "X-Request-Id": "abc\r\nX-Admin: true" } }))
 
-    assertEq(len(response(r).body), 22)
+    assertEq(response(r).body.length, 22)
     assert(!contains(header(r, "x-request-id"), "X-Admin"))
 
 @test
@@ -82,7 +82,7 @@ async AN_ID_LONGER_THAN_THE_LIMIT_IS_REPLACED()
 
     val r = await app.handle(request("GET", "/notes", { headers: { "X-Request-Id": repeat("a", 201) } }))
 
-    assertEq(len(response(r).body), 22)
+    assertEq(response(r).body.length, 22)
 
 @test
 async AN_ID_THAT_IS_EMPTY_OR_A_SPACE_IS_REPLACED()
@@ -90,8 +90,8 @@ async AN_ID_THAT_IS_EMPTY_OR_A_SPACE_IS_REPLACED()
 
     app.get("/notes", requestId({}, (req) -> req.id))
 
-    assertEq(len(response(await app.handle(request("GET", "/notes", { headers: { "x-request-id": "" } }))).body), 22)
-    assertEq(len(response(await app.handle(request("GET", "/notes", { headers: { "x-request-id": "a b" } }))).body), 22)
+    assertEq(response(await app.handle(request("GET", "/notes", { headers: { "x-request-id": "" } }))).body.length, 22)
+    assertEq(response(await app.handle(request("GET", "/notes", { headers: { "x-request-id": "a b" } }))).body.length, 22)
 
 @test
 async THE_HEADER_AND_THE_GENERATOR_ARE_BOTH_THE_PROGRAMS()

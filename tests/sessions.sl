@@ -112,11 +112,11 @@ async THE_DIGEST_IS_BASE64URL_AND_THE_STORED_ID_IS_TOO()
     val cookie = await signedIn()
     val at = lastIndexOf(cookie, ".")
 
-    assertEq(len(cookie[(at + 1)..]), 43)
+    assertEq(cookie[(at + 1)..].length, 43)
 
     val stored = await cookieFrom(made(Secret, { store: memoryStore() }))
 
-    assertEq(len(payloadOf(stored).i), 24)
+    assertEq(payloadOf(stored).i.length, 24)
 
 @test
 async NO_COOKIE_AT_ALL_IS_NOBODY_AND_NOT_A_FAILURE()
@@ -171,7 +171,7 @@ async A_COOKIE_SIGNED_THE_WAY_0_2_0_SIGNED_ONE_IS_NOBODY_AND_NOT_A_FAULT()
     val payload = "{\"v\":\"ada\",\"e\":null}"
     val old = payload + "." + hexOf(hmac("SHA-256", Secret, payload))
 
-    assertEq(len(hexOf(hmac("SHA-256", Secret, payload))), 64)
+    assertEq(hexOf(hmac("SHA-256", Secret, payload)).length, 64)
 
     val back = await made(Secret).handle(request("GET", "/me", { cookies: { session: old } }))
 
@@ -204,7 +204,7 @@ async A_SESSION_PAST_ITS_maxAge_IS_NOBODY()
 async A_REQUEST_THAT_ONLY_READS_A_SESSION_WRITES_NO_COOKIE()
     // **The cookie is written only where `set` was called.** Otherwise every response in a log
     // carries one and every cache has to think about it.
-    assertEq(len(cookies(await made(Secret).handle(request("GET", "/me")))), 0)
+    assertEq(cookies(await made(Secret).handle(request("GET", "/me"))).length, 0)
 
 @test
 async CLEARING_A_SESSION_IS_AN_EMPTY_COOKIE_WITH_NO_AGE_LEFT()
@@ -254,7 +254,7 @@ async A_SESSION_AND_A_CSRF_TOKEN_IN_ONE_RESPONSE_ARE_TWO_COOKIES()
 
     val two = cookies(await app.handle(request("GET", "/in")))
 
-    assertEq(len(two), 2)
+    assertEq(two.length, 2)
     assert(contains(two[0], "session=") || contains(two[1], "session="))
     assert(contains(two[0], "csrf=") || contains(two[1], "csrf="))
 
@@ -285,8 +285,8 @@ async A_SAFE_REQUEST_WITH_NO_TOKEN_IS_ISSUED_ONE()
 @test
 async A_CLIENT_THAT_ALREADY_HAS_A_TOKEN_IS_NOT_GIVEN_A_NEW_ONE()
     // Reissuing on every response would change the token under a page that had already read it.
-    assertEq(len(cookies(await guarded().handle(
-        request("GET", "/read", { cookies: { csrf: "abc" } })))), 0)
+    assertEq(cookies(await guarded().handle(
+        request("GET", "/read", { cookies: { csrf: "abc" } }))).length, 0)
 
 @test
 async AN_UNSAFE_REQUEST_CARRYING_BOTH_AND_MATCHING_GOES_THROUGH()
@@ -428,7 +428,7 @@ async A_STORED_SESSION_ROUND_TRIPS_AND_THE_COOKIE_CARRIES_ONLY_AN_ID()
 
     // And reading one writes nothing: no cookie, and the entry that was there is the entry that is
     // there. A store mode that rewrote on every read would be a database write per request.
-    assertEq(len(cookies(back)), 0)
+    assertEq(cookies(back).length, 0)
     assertEq(store.size(), 1)
 
 @test
@@ -440,11 +440,11 @@ async A_STORED_SESSION_MAY_BE_BIGGER_THAN_A_COOKIE()
     val big = repeat("x", 40000)
     val cookie = await cookieFrom(app, toJSON(big))
 
-    assert(len(cookie) < 200)
+    assert(cookie.length < 200)
 
     val back = await app.handle(request("GET", "/me", { cookies: { session: cookie } }))
 
-    assertEq(len(doc(back).who), 40000)
+    assertEq(doc(back).who.length, 40000)
 
 @test
 async REVOKING_A_STORED_SESSION_IS_A_delete_AND_THE_COOKIE_IS_THEN_NOBODY()
@@ -508,7 +508,7 @@ async A_TAMPERED_ID_IS_NOBODY_AND_THE_STORE_IS_NEVER_ASKED()
 
     assertEq(store.seen.gets, 0)
 
-    val bent = replace(cookie, payloadOf(cookie).i, repeat("0", len(payloadOf(cookie).i)))
+    val bent = replace(cookie, payloadOf(cookie).i, repeat("0", payloadOf(cookie).i.length))
 
     assert(bent != cookie)
     assertEq(doc(await app.handle(request("GET", "/me", { cookies: { session: bent } }))).who, null)
@@ -552,7 +552,7 @@ async A_REQUEST_THAT_ONLY_READS_A_STORED_SESSION_WRITES_NEITHER_A_COOKIE_NOR_AN_
     val store = memoryStore()
     val app = made(Secret, { store: store })
 
-    assertEq(len(cookies(await app.handle(request("GET", "/me")))), 0)
+    assertEq(cookies(await app.handle(request("GET", "/me"))).length, 0)
     assertEq(store.size(), 0)
 
 @test
@@ -651,7 +651,7 @@ async A_STORED_SESSION_AND_A_CSRF_TOKEN_IN_ONE_RESPONSE_ARE_STILL_TWO_COOKIES()
 
     val two = cookies(await app.handle(request("GET", "/in")))
 
-    assertEq(len(two), 2)
+    assertEq(two.length, 2)
     assert(contains(two[0], "session=") || contains(two[1], "session="))
     assert(contains(two[0], "csrf=") || contains(two[1], "csrf="))
 

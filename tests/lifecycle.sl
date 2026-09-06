@@ -210,7 +210,7 @@ async onShutdown_WATCHES_BOTH_SIGNALS()
     on(name: string, fn: function) -> integer
         push(watched, name)
 
-        len(watched)
+        watched.length
 
     off(id) = null
 
@@ -226,7 +226,7 @@ async THE_SIGNAL_RUNS_THE_ACTION()
     on(name: string, fn: function) -> integer
         handlers[name] = fn
 
-        len(keys(handlers))
+        keys(handlers).length
 
     off(id) = null
 
@@ -245,7 +245,7 @@ async THE_SIGNAL_RUNS_THE_ACTION()
 async THE_ANSWER_IS_HOW_TO_STOP_WATCHING()
     var stopped = []
 
-    on(name: string, fn: function) -> integer = len(name)
+    on(name: string, fn: function) -> integer = name.length
 
     off(id)
         push(stopped, id)
@@ -267,7 +267,7 @@ async WHICH_SIGNALS_ARE_WATCHED_IS_THE_PROGRAMS()
     on(name: string, fn: function) -> integer
         push(watched, name)
 
-        len(watched)
+        watched.length
 
     off(id) = null
 
@@ -285,7 +285,7 @@ async A_SIGNAL_DRAINING_AN_api_IS_THE_WHOLE_SHAPE_OF_A_SHUTDOWN()
     on(name: string, fn: function) -> integer
         handlers[name] = fn
 
-        len(keys(handlers))
+        keys(handlers).length
 
     off(id) = null
 

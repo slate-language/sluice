@@ -55,7 +55,7 @@ async THE_GUARDS_ARE_COMPOSED_ONCE_AND_NOT_WALKED_PER_REQUEST()
     await app.handle(request("GET", "/x"))
 
     assertEq(built, 1)
-    assertEq(len(seen), 4)
+    assertEq(seen.length, 4)
 
 @test
 async A_GUARD_THAT_REFUSES_STOPS_THE_ONES_UNDER_IT()
@@ -84,7 +84,7 @@ async routes_SAYS_THE_METHOD_THE_PATH_AND_WHAT_EACH_ONE_RUNS()
 
     val listed = app.routes()
 
-    assertEq(len(listed), 3)
+    assertEq(listed.length, 3)
     assertEq(listed[0], { method: "GET", path: "/notes/:id", guards: [], handler: handler })
     assertEq(listed[1].method, "POST")
     assertEq(listed[1].path, "/notes")

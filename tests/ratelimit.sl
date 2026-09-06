@@ -279,7 +279,7 @@ async A_STORE_A_PROGRAM_SUPPLIED_IS_THE_ONE_THAT_IS_COUNTED_IN()
     watched(bucket: string, ttl: integer) -> integer
         push(seen, bucket)
 
-        len(seen)
+        seen.length
 
     val app = made(() -> at, { store: { hit: watched } })
 

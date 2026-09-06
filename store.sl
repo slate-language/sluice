@@ -84,7 +84,7 @@ export makeMemoryStore(options: object = {}) -> object
     // How many sessions are held. **Not part of the interface** -- a redis store could not answer it
     // without a scan -- and it is here because the alternative for a test that means to say an entry
     // was really removed is to trust that it was.
-    size() -> integer = len(keys(table.held))
+    size() -> integer = keys(table.held).length
 
     { get: get, set: set, delete: delete, size: size }
 

@@ -48,7 +48,7 @@ bodied(shape, h)
 
         val bad = shape.mismatch(parsed.value)
 
-        if len(bad) != 0
+        if bad.length != 0
             return problemResponse(400, "Bad Request",
                 "the request body does not fit " + shape.name(),
                 { instance: req.path, mismatch: bad })
@@ -73,7 +73,7 @@ queried(shape, h)
         val q = if has(req, "query") then req.query else {}
         val bad = shape.mismatch(q)
 
-        if len(bad) != 0
+        if bad.length != 0
             return problemResponse(400, "Bad Request",
                 "the query string does not fit " + shape.name(),
                 { instance: req.path, mismatch: bad })
@@ -107,7 +107,7 @@ bearing(verify, h)
         if !startsWith(lower(head), "bearer ")
             return unauthorized(req, "the Authorization header is not a bearer token")
 
-        val token = trim(head[7..<len(head)])
+        val token = trim(head[7..<head.length])
 
         if token == ""
             return unauthorized(req, "the bearer token is empty")

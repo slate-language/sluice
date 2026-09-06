@@ -16,7 +16,7 @@ async THE_SINK_IS_GIVEN_A_RECORD_AND_NOT_A_LINE_OF_TEXT()
 
     await app.handle(request("GET", "/notes/7"))
 
-    assertEq(len(seen), 1)
+    assertEq(seen.length, 1)
     assertEq(seen[0].method, "GET")
     assertEq(seen[0].path, "/notes/7")
     assertEq(seen[0].status, 200)

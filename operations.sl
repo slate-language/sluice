@@ -69,11 +69,11 @@ val IdCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234567
 val IdLimit = 200
 
 usable(id: string) -> boolean
-    if len(id) == 0 || len(id) > IdLimit then return false
+    if id.length == 0 || id.length > IdLimit then return false
 
     var i = 0
 
-    while i < len(id)
+    while i < id.length
         if indexOf(IdCharacters, id[i..<(i + 1)]) == null then return false
 
         i = i + 1
@@ -387,7 +387,7 @@ export rateStore(options: object = {}) -> object
         slot.count
 
     // How many keys are being held, which is what says a sweep happened.
-    size() -> integer = len(keys(held))
+    size() -> integer = keys(held).length
 
     { hit: hit, size: size }
 
@@ -426,7 +426,7 @@ export healthHandler(check) -> function
 
         val reasons = asReasons(await check())
 
-        if len(reasons) == 0 then return jsonResponse({ status: "ok" }, 200)
+        if reasons.length == 0 then return jsonResponse({ status: "ok" }, 200)
 
         problemResponse(503, "Service Unavailable", "this service is not well",
             { instance: req.path, reasons: reasons })

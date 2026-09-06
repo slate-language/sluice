@@ -66,7 +66,7 @@ async TWO_FIELDS_AND_A_FILE_ARRIVE_AS_A_FORM()
     val form = await app.handle(sent(body))
 
     assertEq(form.fields, { title: "A note", pinned: "true" })
-    assertEq(len(form.files), 1)
+    assertEq(form.files.length, 1)
     assertEq(form.files[0].field, "upload")
     assertEq(form.files[0].filename, "notes.txt")
     assertEq(form.files[0].type, "text/plain")
@@ -128,7 +128,7 @@ async CONTENT_THAT_LOOKS_LIKE_A_DELIMITER_AND_IS_NOT_IS_CONTENT()
     val app = made({})
     val form = await app.handle(sent(posted([file("u", "a.txt", "text/plain", near)])))
 
-    assertEq(len(form.files), 1)
+    assertEq(form.files.length, 1)
     assertEq(form.files[0].text(), near)
 
 @test
@@ -151,7 +151,7 @@ async A_FILE_THAT_WAS_EMPTY_IS_A_FILE_AND_NOT_AN_ABSENCE()
     val app = made({})
     val form = await app.handle(sent(posted([file("u", "empty.txt", "text/plain", "")])))
 
-    assertEq(len(form.files), 1)
+    assertEq(form.files.length, 1)
     assertEq(form.files[0].bytes, [])
     assertEq(form.files[0].text(), "")
 
@@ -173,8 +173,8 @@ async A_MEGABYTE_OF_BYTES_COMES_BACK_AS_THE_BYTES_IT_WENT_IN_AS()
     val form = await app.handle(sent(posted([field("title", "A big one"),
                                              file("u", "big.png", "image/png", content)])))
 
-    assert(len(content) > 200000, "the body is of the order the ceiling is about")
-    assertEq(len(form.files[0].bytes), len(content))
+    assert(content.length > 200000, "the body is of the order the ceiling is about")
+    assertEq(form.files[0].bytes.length, content.length)
     assertEq(form.files[0].bytes, content)
     assertEq(form.fields, { title: "A big one" })
 
@@ -208,7 +208,7 @@ async A_REPEATED_FIELD_KEEPS_THE_LAST_AND_TWO_FILES_KEEP_BOTH()
     val form = await app.handle(sent(body))
 
     assertEq(form.fields, { tag: "two" })
-    assertEq(len(form.files), 2)
+    assertEq(form.files.length, 2)
     assertEq([form.files[0].filename, form.files[1].filename], ["a.txt", "b.txt"])
     assertEq([form.files[0].field, form.files[1].field], ["page", "page"])
 
@@ -304,7 +304,7 @@ async A_FILE_accept_TAKES_REACHES_THE_HANDLER_AND_FIELDS_ARE_NOT_ASKED_ABOUT()
                                              file("u", "shot.png", "image/png", Binary)])))
 
     assertEq(form.fields, { title: "A screenshot" })
-    assertEq(len(form.files), 1)
+    assertEq(form.files.length, 1)
 
 @test
 async accept_IS_ASKED_ABOUT_FILES_AND_A_BODY_OF_ONLY_FIELDS_HAS_NONE()
@@ -314,7 +314,7 @@ async accept_IS_ASKED_ABOUT_FILES_AND_A_BODY_OF_ONLY_FIELDS_HAS_NONE()
     val form = await app.handle(sent(posted([field("title", "A note"), field("pinned", "true")])))
 
     assertEq(form.fields, { title: "A note", pinned: "true" })
-    assertEq(len(form.files), 0)
+    assertEq(form.files.length, 0)
 
 @test
 async THE_HANDLER_DOES_NOT_RUN_FOR_A_FILE_THAT_WAS_REFUSED()
@@ -426,7 +426,7 @@ async A_BODY_OVER_maxBytes_IS_A_413_SAYING_WHAT_THE_LIMIT_IS()
 @test
 async THE_CEILING_IS_COUNTED_OVER_THE_BYTES_THAT_ARRIVED()
     // **THE HOLE THE TEXT READING LEFT, AND IT WAS IN THE LIMIT AND NOT ONLY IN THE PARSE.** The
-    // count was `len(toBytes(req.body))`, and a body that is not UTF-8 has `body == ""` -- so a
+    // count was `toBytes(req.body).length`, and a body that is not UTF-8 has `body == ""` -- so a
     // binary upload of any size at all measured `0` and no ceiling ever refused one.
     val app = made({ maxBytes: 64 })
     var big = []
@@ -447,8 +447,8 @@ async THE_LIMIT_IS_COUNTED_IN_BYTES_AND_NOT_IN_CHARACTERS()
     // **A limit is about what the socket carried.** Thirty characters of Japanese are ninety bytes,
     // and a limiter that counted characters would let three times what it promised through.
     val body = posted([field("title", repeat("日", 30))])
-    val chars = len(fromBytes(body).value)
-    val bytes = len(body)
+    val chars = fromBytes(body).value.length
+    val bytes = body.length
 
     assert(bytes > chars, "ninety bytes of Japanese are thirty characters")
 

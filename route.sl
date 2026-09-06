@@ -33,10 +33,10 @@ export segments(path: string) -> array of string
     if q != null then p = p[0..<q]
 
     while startsWith(p, "/")
-        p = p[1..<len(p)]
+        p = p[1..<p.length]
 
     while endsWith(p, "/") && p != ""
-        p = p[0..<(len(p) - 1)]
+        p = p[0..<(p.length - 1)]
 
     if p == "" then [] else split(p, "/")
 
@@ -49,23 +49,23 @@ export fit(parts: array of string, want: array of string) -> object | null
     var out = {}
     var i = 0
 
-    while i < len(parts)
+    while i < parts.length
         val p = parts[i]
 
         if startsWith(p, "*")
-            val rest = p[1..<len(p)]
+            val rest = p[1..<p.length]
 
-            if rest != "" then out[rest] = join(want[i..<len(want)], "/")
+            if rest != "" then out[rest] = join(want[i..<want.length], "/")
 
             return out
 
-        if i >= len(want) then return null
+        if i >= want.length then return null
 
         if startsWith(p, ":")
-            out[p[1..<len(p)]] = percentDecode(want[i], false)
+            out[p[1..<p.length]] = percentDecode(want[i], false)
         elif p != want[i]
             return null
 
         i = i + 1
 
-    if len(want) != len(parts) then null else out
+    if want.length != parts.length then null else out
