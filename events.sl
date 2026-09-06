@@ -51,7 +51,9 @@ export makeHub(options: object = {}) -> object
         val event = if keep > 0 then remembered(topic, value) else value
 
         for one in listeners(topic)
-            if one.closed then continue
+            // **A stream that is ending takes nothing new**, its last event having gone out already:
+            // queueing onto it would be handing something to a reader that is on its way out.
+            if one.closed || one.ending then continue
 
             if one.waiting != null
                 val waiting = one.waiting
@@ -106,6 +108,30 @@ export makeHub(options: object = {}) -> object
 
         out
 
+    // Take one subscriber off its topic and tell whoever was reading that the stream ended.
+    //
+    // **It is here rather than inside `subscribe` because two things end a subscription**: the
+    // program or its reader, through the `close` a subscriber answers, and the hub itself when a
+    // drain ends every stream at once. Both mean the same thing to a reader, so both are one
+    // function. **Idempotent**, a handler, a writer and a drain all being entitled to call it.
+    endOne(topic: string, one: object)
+        if one.closed then return null
+
+        one.closed = true
+
+        if one.waiting != null
+            val waiting = one.waiting
+
+            one.waiting = null
+
+            settle(waiting, { done: true, value: null })
+
+        val held = topicOf(topic)
+
+        held.listeners = without(held.listeners, one)
+
+        null
+
     // `subscribe(topic, options)` -- a source of everything published to `topic` from now on, and of
     // what it missed where `lastEventId` says where it left off.
     //
@@ -122,7 +148,7 @@ export makeHub(options: object = {}) -> object
     // test here that binds a port, because a writer noticing that nobody is reading is the one thing
     // a handler driven directly cannot show.
     subscribe(topic: string, options: object = {}) -> object
-        val one = { queue: [], waiting: null, dropped: 0, closed: false,
+        val one = { queue: [], waiting: null, dropped: 0, closed: false, ending: false,
                     bound: options.bound ?? Backlog }
 
         // **The replay goes through the queue the live events go through**, so a replay longer than
@@ -145,6 +171,14 @@ export makeHub(options: object = {}) -> object
 
                 return { done: false, value: head }
 
+            // **A stream that is ending is done once what it held has gone out**, which is what lets
+            // a shutdown send a last event and still end the stream in the same breath: `endAll`
+            // publishes, and the reader takes that event and then the end of the stream.
+            if one.ending
+                endOne(topic, one)
+
+                return { done: true, value: null }
+
             one.waiting = pending()
 
             await one.waiting
@@ -152,23 +186,7 @@ export makeHub(options: object = {}) -> object
         // Leave the topic. **Idempotent**, a handler and a test both being entitled to call it, and
         // it settles a parked `next` so that whoever was reading is told the stream ended rather
         // than waiting for ever.
-        close()
-            if one.closed then return null
-
-            one.closed = true
-
-            if one.waiting != null
-                val waiting = one.waiting
-
-                one.waiting = null
-
-                settle(waiting, { done: true, value: null })
-
-            val held = topicOf(topic)
-
-            held.listeners = without(held.listeners, one)
-
-            null
+        close() = endOne(topic, one)
 
         // How many events this subscriber was too slow to take.
         dropped() -> integer = one.dropped
@@ -181,7 +199,60 @@ export makeHub(options: object = {}) -> object
     // was let go: a hub that leaked one would look exactly like a hub that did not.
     count(topic: string) -> integer = listeners(topic).length
 
-    { publish: publish, subscribe: subscribe, count: count }
+    // `open()` -- how many streams this hub is feeding, across every topic.
+    //
+    // **A DRAIN NEEDS ONE NUMBER AND NOT A LIST OF TOPICS IT DOES NOT KNOW.** `count` answers for a
+    // topic a program named; this answers for the hub, which is what says whether the streams
+    // `endAll` ended have actually finished -- a subscriber leaves its topic when its reader takes
+    // the end of the stream, and not a moment before.
+    open() -> integer
+        var live = 0
+
+        for topic in keys(topics)
+            live = live + topics[topic].listeners.length
+
+        live
+
+    // `endAll(options)` -- end every open stream on every topic, and answer how many there were.
+    //
+    // **A SHUTDOWN THAT DOES NOT END ITS STREAMS DOES NOT SHUT DOWN.** An event stream is a response
+    // that never finishes: `slate:http`'s `close` lets a connection with a request in flight finish
+    // that response before closing it, so a server with one subscriber attached holds its socket
+    // until the stream ends or the socket times out. Nothing in `slate:http` can end it either --
+    // the source is this hub's, so this is the only place that knows how. `drain` calls it, and a
+    // browser reconnects on its own to whichever instance is taking traffic by then.
+    //
+    // **THE LAST EVENT IS THE PROGRAM'S, BECAUSE SSE HAS NO GOODBYE OF ITS OWN.** A stream simply
+    // ends, and what a client should make of that is the application's protocol and not this
+    // package's: `endAll({ event: { event: "shutdown", retry: 5000 } })` says it and `endAll()` says
+    // nothing. The event goes out before the end and through the queue every other event goes
+    // through, so a reader takes it and then takes the end of the stream.
+    //
+    // **What it marks is `ending` and not `closed`**, which is the whole of why the last event
+    // arrives: a closed subscriber answers `done` with its queue unread, and an ending one answers
+    // what it holds and then `done`. A subscriber parked with nothing to take is ended on the spot.
+    endAll(options: object = {}) -> integer
+        val farewell = options.event ?? null
+        var ended = 0
+
+        for topic in keys(topics)
+            if farewell != null then publish(topic, farewell)
+
+            // **`endOne` rewrites the list this walks**, `without` answering a new array -- so the
+            // loop holds the one it was given and every subscriber on the topic is reached.
+            for one in listeners(topic)
+                if one.closed then continue
+
+                ended = ended + 1
+                one.ending = true
+
+                // Nothing left to take: a parked reader has an empty queue by construction, so the
+                // farewell above either settled it or there was none.
+                if one.waiting != null then endOne(topic, one)
+
+        ended
+
+    { publish: publish, subscribe: subscribe, count: count, open: open, endAll: endAll }
 
 // `lastEventId(req)` -- the id a reconnecting client says it last saw, or `null`.
 //

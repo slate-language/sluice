@@ -167,6 +167,48 @@ async A_SUBSCRIBER_WHOSE_READER_IS_STILL_THERE_IS_LEFT_ALONE()
 
     closeServer(server)
 
+@test
+async A_DRAIN_ENDS_A_REAL_STREAM_RATHER_THAN_HOLDING_THE_SOCKET_OPEN_FOR_IT()
+    // **THE OTHER HALF OF THE SAME FACT, AND THE ONE A SHUTDOWN MEETS.** A streamed response never
+    // runs to `done` on its own, so a server closed under one holds its connection until the socket
+    // times out -- five seconds, and the note above says so. A drain given the hub feeding the stream
+    // ends it instead: the last event goes out, the source answers `done`, the response finishes, and
+    // there is nothing left for `close` to wait on. `count(topic)` falling with nothing published is
+    // the proof the response really ran to `done`, which is what a handler driven directly cannot
+    // show.
+    needsASocket()
+
+    val app = api()
+    val feed = hub()
+
+    app.get("/events", (req) -> sse(feed.subscribe("notes"), { heartbeat: 0 }))
+
+    val server = serve(0, app)
+    val port = localPort(server)
+    val seen = { text: "" }
+    val c = (await connect("127.0.0.1", port)).value
+
+    onData(c, (chunk) -> heard(seen, chunk))
+
+    await send(c, "GET /events HTTP/1.1\r\nHost: h\r\n\r\n")
+
+    assert(await until(() -> feed.count("notes") == 1), "the subscription is made by the request")
+
+    feed.publish("notes", "first")
+
+    assert(await until(() -> contains(seen.text, "data: first")), "the stream is live before anything")
+
+    val outcome = await app.drain(server, { grace: 2000, poll: 5, hubs: [feed],
+        farewell: { event: "shutdown", data: "back shortly" } })
+
+    assertEq(outcome.ended, 1)
+    assertEq(outcome.cut, 0)
+
+    assert(await until(() -> contains(seen.text, "event: shutdown")), "the client is told over the wire")
+    assert(await until(() -> feed.count("notes") == 0), "and the response ran to done and let go")
+
+    closeSocket(c)
+
 // One more event into a socket that has gone, and whether the topic is empty yet.
 //
 // **The writer finds out by WRITING**, having nothing else to go on: it is parked on `next` until

@@ -320,9 +320,24 @@ onShutdown(() -> app.drain(server, { grace: 10000 }))
 
 **A drain is three things in one order**: stop taking requests, let what is in hand finish, then let
 go of the socket. Doing them in any other order lets a request in. `app.drain` answers
-`{ cut, waited }` — `cut` being how many requests were still running when the grace ran out, because a
-shutdown that regularly cuts requests off is a grace that is too short or a handler that is too slow,
-and neither is visible unless the number is.
+`{ cut, waited, ended }` — `cut` being how many requests were still running when the grace ran out,
+because a shutdown that regularly cuts requests off is a grace that is too short or a handler that is
+too slow, and neither is visible unless the number is.
+
+**An event stream is not a request in flight, and a drain that waited for one would wait for ever.**
+`handle` is done with an SSE route the moment it answers the response, so nothing is counted while
+the stream is open — and `close` then holds the socket for that unfinished response until the
+connection times out. So a program with hubs names them, and their streams are ended as soon as new
+work is refused, with a last event where the program has one to send:
+
+```slate
+onShutdown(() -> app.drain(server, { grace: 10000, hubs: [feed],
+    farewell: { event: "shutdown", data: "back shortly" } }))
+```
+
+`ended` is how many streams there were, and the grace bounds the wait for them exactly as it bounds
+the wait for a request: a client that never comes back for the end of its stream does not hold the
+socket for ever.
 
 **A draining server answers `503` rather than closing the connection**, which is the load balancer's
 cue to send the next request elsewhere — a client that is told retries somewhere useful and one that
@@ -576,6 +591,18 @@ your program stops, a subscriber a test is done with — and it is idempotent, s
 call one the writer has already closed. `feed.count(topic)` is how either is seen, and it is what
 `tests/hangup.sl` — the one test in this package that binds a port — asserts against a real client
 that hangs up mid-stream.
+
+**`feed.endAll(options)` ends every open stream on every topic, and a shutdown is what calls it.** An
+event stream is a response that never finishes, so a server with one subscriber attached holds its
+socket until the stream ends — `app.drain(server, { hubs: [feed] })` is where a program says which
+hubs are feeding them, and the drain then closes promptly instead of waiting its grace out. SSE has
+no goodbye of its own, so a last event is yours to name: `endAll({ event: … })` sends it before the
+end, `endAll()` says nothing, and either way `endAll` answers how many streams there were. A browser
+reconnects on its own to whichever instance is taking traffic by then.
+
+**A stream ends when its reader takes the end, and `feed.open()` is how many have not yet** — every
+topic together, which is what a drain waits on. Closing the socket in between would throw away the
+very event that was worth sending.
 
 ### Replay, for a client that reconnects
 

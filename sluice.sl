@@ -152,9 +152,17 @@ export multipart(options: object = {}, handler = null) = applied(multipartGuard(
 // `drain(server, options)` -- stop taking requests, let what is in hand finish, then close.
 //
 // **`api.drain(server, options)` is the one to write**, an api being the only thing that can count
-// what is in flight; this is for a program serving something else. It answers `{ cut, waited }`.
+// what is in flight; this is for a program serving something else. It answers
+// `{ cut, waited, ended }`.
 //
-// `options` takes `grace` in milliseconds (`10000`), `inflight`, `stop`, `close` and `poll`.
+// **A SERVER WITH AN EVENT STREAM OPEN DOES NOT CLOSE UNTIL THE STREAM ENDS**, a stream being a
+// response that never finishes -- so `hubs` is where a program names the hubs feeding them and
+// `farewell` is the last event they are sent before they end:
+//
+//     app.drain(server, { grace: 10000, hubs: [feed], farewell: { event: "shutdown" } })
+//
+// `options` takes `grace` in milliseconds (`10000`), `inflight`, `stop`, `close`, `poll`, `hubs` and
+// `farewell`.
 export drain(server, options: object = {}) = drainServer(server, options)
 
 // `onShutdown(action, options)` -- run `action` on `SIGTERM` and `SIGINT`, and answer how to stop.
@@ -184,8 +192,8 @@ export memoryStore(options: object = {}) -> object = makeMemoryStore(options)
 // `options` takes `name` (`"csrf"`) and `header` (`"x-csrf-token"`).
 export csrf(options: object = {}, handler = null) = applied(csrfGuard(options), handler)
 
-// `hub(options)` -- an event hub: `publish(topic, value)`, `subscribe(topic, options)` and
-// `count(topic)`.
+// `hub(options)` -- an event hub: `publish(topic, value)`, `subscribe(topic, options)`,
+// `count(topic)`, `open()` and `endAll(options)`.
 //
 // `subscribe` answers a SOURCE, which is what `sse` takes, so a route is one line:
 //
@@ -195,6 +203,13 @@ export csrf(options: object = {}, handler = null) = applied(csrfGuard(options), 
 // 0.0.29: a response that ends with its source unexhausted tells the source so, and `sse` forwards
 // it. `close()` is still there for a program ending a subscription itself, and calling it twice is
 // the same as calling it once.
+//
+// **`endAll` IS WHAT A SHUTDOWN CALLS**, and it is what `drain`'s `hubs` option calls for a program:
+// every open stream is sent the last event `endAll({ event: … })` was given, if any, and then ends.
+// It answers how many there were. Without it a draining server holds its socket for every stream
+// still attached to it. **A stream ends when its reader takes the end**, which is what `open()` --
+// how many streams the hub is feeding, across every topic -- is for: `drain` waits on it, under the
+// same grace as a request, rather than closing the socket over the last event it just sent.
 //
 // `options` takes `replay`, which is how many events of every topic the hub keeps for a client that
 // reconnects -- `0`, keeping nothing, by default. `subscribe`'s options are `bound`, how far behind
