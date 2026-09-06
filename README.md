@@ -88,7 +88,7 @@ request("GET", "/notes", { address: "203.0.113.7" })
 | `query(Shape, handler)` | the same check over `req.query`, which is already an object of strings |
 | `bearer(verify, handler)` | the token out of `Authorization`, `req with { user }`; a `401` problem with `WWW-Authenticate` otherwise |
 | `cors(options, handler)` | the headers a browser needs, and a preflight answered without the handler running |
-| `logger(sink, handler)` | `sink({ method, path, status, ms })` once the answer is known |
+| `logger(sink, handler, options)` | `sink({ method, path, status, ms, address })` once the answer is known |
 | `session(secret, options, handler)` | a signed cookie carrying the session itself — or, with a `store`, a signed id into one — on `req.session` |
 | `csrf(options, handler)` | the double-submit token, and a `403` problem without it |
 | `requestId(options, handler)` | one name for this request, on `req.id` and on the answer |
@@ -161,10 +161,12 @@ random bytes in base64url — 22 characters carrying what 32 of hex carried, on 
 a header on every answer and into every log line the request writes.
 
 **`logger`'s record carries `id` wherever this guard ran**, which is what turns a log into something
-a person can follow one request through:
+a person can follow one request through, and carries `address` — the peer of the socket, or the
+first hop of `X-Forwarded-For` where `options.trustProxy` says a proxy in front of this server wrote
+it, exactly as `rateLimit` reads it:
 
 ```
-2026-09-05T12:07:51Z INFO  request method=POST path=/notes status=201 ms=0 id=Qwc4shTADrdTa1jXzR0Vpw
+2026-09-05T12:07:51Z INFO  request method=POST path=/notes status=201 ms=0 address=203.0.113.7 id=Qwc4shTADrdTa1jXzR0Vpw
 ```
 
 **What a client sent is checked before it is echoed.** The value goes back out in a response header,

@@ -82,8 +82,10 @@ export bearer(verify: function, handler = null) = applied(bearerGuard(verify), h
 // handler running.
 export cors(options: object, handler = null) = applied(corsGuard(options), handler)
 
-// `logger(sink, handler)` -- `sink({ method, path, status, ms })` once the answer is known.
-export logger(sink: function, handler = null) = applied(loggerGuard(sink), handler)
+// `logger(sink, handler, options)` -- `sink({ method, path, status, ms, address })` once the answer
+// is known. `options.trustProxy` reads the client's address from `x-forwarded-for` rather than the
+// socket's peer, exactly as `rateLimit`'s does.
+export logger(sink: function, handler = null, options: object = {}) = applied(loggerGuard(sink, options), handler)
 
 // `session(secret, options, handler)` -- a signed cookie carrying the session, or a signed id into a
 // store.
