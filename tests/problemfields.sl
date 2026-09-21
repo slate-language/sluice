@@ -65,28 +65,31 @@ val Boundary = "----sluiceFormBoundary7MA4YWxk"
 
 sending(boundary: string) -> object = { "Content-Type": "multipart/form-data; boundary=" + boundary }
 
-joined(pieces: array) -> array
-    var out = []
+// **A body is a buffer here, exactly as it is in `tests/multipart.sl` and on a real request.**
+// `toBytes` answers `bytes`, which is a kind of its own, and `concat` joins the kind its FIRST
+// argument is -- so the accumulator starts as a buffer and every piece after it may be either.
+joined(pieces: array) -> bytes
+    var out = bytes([])
 
     for piece in pieces
         out = concat(out, if piece is string then toBytes(piece) else piece)
 
     out
 
-posted(parts: array) -> array
-    var out = []
+posted(parts: array) -> bytes
+    var out = bytes([])
 
     for part in parts
         out = joined([out, "--" + Boundary + "\r\n", part, "\r\n"])
 
     joined([out, "--" + Boundary + "--\r\n"])
 
-file(name: string, filename: string, kind: string, content) -> array
+file(name: string, filename: string, kind: string, content) -> bytes
     val said = "Content-Disposition: form-data; name=\"" + name + "\"; filename=\"" + filename + "\""
 
     joined([said, "\r\nContent-Type: " + kind + "\r\n\r\n", content])
 
-field(name: string, value) -> array =
+field(name: string, value) -> bytes =
     joined(["Content-Disposition: form-data; name=\"" + name + "\"\r\n\r\n", value])
 
 uploading(options: object) -> object

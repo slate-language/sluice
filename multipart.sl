@@ -146,7 +146,12 @@ firstRefused(accept, files: array)
 // The body as bytes. **`req.bytes` is what the server read**, and the two fallbacks are for a request
 // built by hand -- `testing.sl`'s `request` fills both, and a handler called with an object naming
 // only `body` still gets the text it meant.
-bytesOf(req) -> array
+// **EITHER OF slate's TWO BYTE SEQUENCES ARRIVES HERE, AND EVERY SIGNATURE BELOW SAYS SO.** `bytes`
+// is a kind of its own -- `toBytes` and a server's `req.bytes` answer one -- while a body assembled
+// in a program is an array of small numbers. They walk, index and slice alike, so the parser reads
+// both without knowing which it has; an annotation naming only `array` is what refuses a buffer, and
+// it refuses it at run time, on the upload this guard exists for.
+bytesOf(req) -> array | bytes
     if has(req, "bytes") then return req.bytes
     if has(req, "body") then return toBytes(req.body)
 
@@ -162,7 +167,7 @@ bytesOf(req) -> array
 // short: RFC 2046 requires the boundary to appear nowhere in any part's content, so the pieces
 // between occurrences ARE the parts. The first piece is the preamble, every middle piece is a part,
 // and the piece after the closing delimiter is an epilogue nobody reads.
-export parseMultipart(raw: array, boundary: string) -> object
+export parseMultipart(raw: array | bytes, boundary: string) -> object
     val delimiter = toBytes("--" + boundary)
     val skips = skipTable(delimiter)
     val blanks = skipTable(Blank)
@@ -229,20 +234,20 @@ export parseMultipart(raw: array, boundary: string) -> object
 
 // One file of a form. **`text` closes over the bytes rather than decoding them now**, so an endpoint
 // taking a hundred images does not decode a hundred images to find out that none of them is text.
-fileOf(field: string, filename: string, kind: string, content: array) -> object
+fileOf(field: string, filename: string, kind: string, content: array | bytes) -> object
     text() -> string | null = textOf(content)
 
     { field: field, filename: filename, type: kind, bytes: content, text: text }
 
 // Bytes as the text they are, or `null` where they are not text.
-textOf(bs: array) -> string | null
+textOf(bs: array | bytes) -> string | null
     val read = fromBytes(bs)
 
     if read.ok then read.value else null
 
 failed(why: string) -> object = { ok: false, error: why }
 
-opens(bs: array, prefix: array) -> boolean
+opens(bs: array | bytes, prefix: array | bytes) -> boolean
     if bs.length < prefix.length then return false
 
     var i = 0
@@ -254,7 +259,7 @@ opens(bs: array, prefix: array) -> boolean
 
     true
 
-closes(bs: array, suffix: array) -> boolean
+closes(bs: array | bytes, suffix: array | bytes) -> boolean
     if bs.length < suffix.length then return false
 
     var i = 0
@@ -281,7 +286,7 @@ closes(bs: array, suffix: array) -> boolean
 // How far the search may move on having landed on each byte. **The last byte of the delimiter is left
 // out of the table on purpose**: it is the one being compared, and giving it a skip of its own would
 // stop the search advancing at all where it matches and the rest does not.
-skipTable(needle: array) -> array
+skipTable(needle: array | bytes) -> array
     val width = needle.length
     var table = []
     var i = 0
@@ -301,7 +306,7 @@ skipTable(needle: array) -> array
     table
 
 // Where `needle` next appears in `hay` at or after `from`, or `null`.
-findBytes(hay: array, needle: array, skips: array, from: integer) -> integer | null
+findBytes(hay: array | bytes, needle: array | bytes, skips: array, from: integer) -> integer | null
     val width = needle.length
     val end = hay.length - width
 

@@ -292,7 +292,9 @@ putInt16(out: array, n: integer)
     push(out, (n >> 8) & 255)
     push(out, n & 255)
 
-putBytes(out: array, bs: array)
+// **`out` is the array this file is building and `bs` is either kind**, `toBytes` answering `bytes`,
+// which is a kind of its own and not an array. Both walk the same way, so only the annotation moves.
+putBytes(out: array, bs: array | bytes)
     for b in bs
         push(out, b)
 

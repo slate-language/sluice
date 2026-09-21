@@ -62,7 +62,7 @@ export request(method: string, path: string, options: object = {}) -> object
 // Bytes as the text `serve` would have made of them. **A body that is not UTF-8 is `""` and not a
 // fault**, which is exactly what the server does with one: `body` is the reading and `bytes` are what
 // arrived.
-textOf(bs: array) -> string
+textOf(bs: array | bytes) -> string
     val read = fromBytes(bs)
 
     if read.ok then read.value else ""

@@ -4,9 +4,11 @@
 // honest way to test a parser: a body this file generated with the parser's own idea of the format
 // would agree with it by construction and pass for every mistake either could make.
 //
-// **AND THEY ARE BUILT AS BYTES, WHICH IS WHAT THIS PARSER READS.** A multipart body carrying a file
-// is not text and never was; `posted` therefore answers an array of bytes and every request here
-// sends it as `bytes`, which is what `serve` puts on a request beside the `body` it could make of it.
+// **AND THEY ARE BUILT AS `bytes`, WHICH IS WHAT A SERVER REALLY HANDS THIS PARSER.** A multipart
+// body carrying a file is not text and never was; `posted` therefore answers a buffer -- slate's own
+// kind, what `toBytes` gives back -- and every request here sends it as `bytes`, which is what
+// `serve` puts on a request beside the `body` it could make of it. Building these as an array of
+// numbers instead would test the parser against a value no client can produce.
 
 import { api, multipart, request, response } from "../sluice.sl"
 import { doc, status } from "./support.sl"
@@ -16,9 +18,11 @@ val Boundary = "----sluiceFormBoundary7MA4YWxk"
 // The `Content-Type` a client sends with one of these.
 sending(boundary: string) -> object = { "Content-Type": "multipart/form-data; boundary=" + boundary }
 
-// Pieces -- each a string or an array of bytes -- as the one array of bytes they are.
-joined(pieces: array) -> array
-    var out = []
+// Pieces -- each a string, an array of small numbers or a buffer -- as the one buffer they are.
+// **`concat` decides which kind it is joining from its FIRST argument**, so the accumulator starts as
+// a buffer and every piece after it may be either.
+joined(pieces: array) -> bytes
+    var out = bytes([])
 
     for piece in pieces
         out = concat(out, if piece is string then toBytes(piece) else piece)
@@ -26,24 +30,24 @@ joined(pieces: array) -> array
     out
 
 // A body out of parts already written as `headers\r\n\r\ncontent`.
-posted(parts: array) -> array
-    var out = []
+posted(parts: array) -> bytes
+    var out = bytes([])
 
     for part in parts
         out = joined([out, "--" + Boundary + "\r\n", part, "\r\n"])
 
     joined([out, "--" + Boundary + "--\r\n"])
 
-field(name: string, value) -> array =
+field(name: string, value) -> bytes =
     joined(["Content-Disposition: form-data; name=\"" + name + "\"\r\n\r\n", value])
 
-file(name: string, filename: string, kind: string, content) -> array
+file(name: string, filename: string, kind: string, content) -> bytes
     val said = "Content-Disposition: form-data; name=\"" + name + "\"; filename=\"" + filename + "\""
 
     joined([said, "\r\nContent-Type: " + kind + "\r\n\r\n", content])
 
 // A request carrying one of these bodies.
-sent(body: array) -> object = request("POST", "/notes", { headers: sending(Boundary), bytes: body })
+sent(body: array | bytes) -> object = request("POST", "/notes", { headers: sending(Boundary), bytes: body })
 
 // An api whose one route hands the form straight back.
 made(options: object) -> object
@@ -85,7 +89,7 @@ async A_BINARY_FILE_ARRIVES_AS_THE_BYTES_THAT_WERE_SENT()
     val form = await app.handle(sent(body))
 
     assertEq(form.fields, { title: "A screenshot" })
-    assertEq(form.files[0].bytes, Binary)
+    assertEq(form.files[0].bytes, bytes(Binary))
     assertEq(form.files[0].type, "image/png")
 
 @test
@@ -152,7 +156,7 @@ async A_FILE_THAT_WAS_EMPTY_IS_A_FILE_AND_NOT_AN_ABSENCE()
     val form = await app.handle(sent(posted([file("u", "empty.txt", "text/plain", "")])))
 
     assertEq(form.files.length, 1)
-    assertEq(form.files[0].bytes, [])
+    assertEq(form.files[0].bytes, bytes([]))
     assertEq(form.files[0].text(), "")
 
 @test
@@ -161,7 +165,7 @@ async A_MEGABYTE_OF_BYTES_COMES_BACK_AS_THE_BYTES_IT_WENT_IN_AS()
     // What makes it affordable is the skipping search -- a comparison per byte would be seconds here
     // and this test's own timing is where that would show. What makes it exact is nothing clever:
     // the content is a slice of what arrived and no decoding happens on the way.
-    var content = Binary
+    var content = bytes(Binary)
     var i = 0
 
     while i < 14

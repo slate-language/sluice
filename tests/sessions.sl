@@ -13,7 +13,7 @@ val Secret = "a secret nobody else has"
 // spelling that was dropped has to be able to write it**, and nothing else does.
 val Digits = "0123456789abcdef"
 
-hexOf(bytes: array) -> string
+hexOf(bytes: array | bytes) -> string
     var out = ""
 
     for b in bytes
