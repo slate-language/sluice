@@ -17,7 +17,7 @@ hexOf(bytes: array) -> string
     var out = ""
 
     for b in bytes
-        out = out + Digits[(b / 16)..<(b / 16 + 1)] + Digits[(b % 16)..<(b % 16 + 1)]
+        out = out + Digits[(b \ 16)..<(b \ 16 + 1)] + Digits[(b % 16)..<(b % 16 + 1)]
 
     out
 

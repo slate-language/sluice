@@ -333,7 +333,7 @@ leftmost(value) -> string | null
 
 // Milliseconds as whole seconds, rounded up, and never less than one. **A `Retry-After: 0` is a
 // client told to try again immediately**, which is the one answer a limiter must not give.
-seconds(ms: integer) -> integer = max(1, (ms + 999) / 1000)
+seconds(ms: integer) -> integer = max(1, (ms + 999) \ 1000)
 
 // The monotonic clock in milliseconds. **Monotonic and not the wall clock**: a window measured
 // against a clock that can be set backwards is a window that can be reopened by an operator running
