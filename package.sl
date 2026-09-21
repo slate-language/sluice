@@ -21,6 +21,6 @@
     // `tests/postgres.sl` are what keep it honest.
     devDependencies: {
         logger: { git: "github.com/slate-language/logger", version: "0.2.0" },
-        pg: { git: "github.com/slate-language/pg", version: "0.5.0" },
+        pg: { git: "github.com/slate-language/pg", version: "0.7.0" },
     },
 }
