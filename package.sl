@@ -19,8 +19,10 @@
     // record and that package takes one, and the test is the only thing that says the two really
     // fit. `pg` is what `examples/tasks/` is written over, and `tests/tasks.sl` and
     // `tests/postgres.sl` are what keep it honest.
+    //
+    // `logger` 0.2.1 is the first that slate 0.1.6's checker accepts.
     devDependencies: {
-        logger: { git: "github.com/slate-language/logger", version: "0.2.0" },
+        logger: { git: "github.com/slate-language/logger", version: "0.2.1" },
         pg: { git: "github.com/slate-language/pg", version: "0.7.0" },
     },
 }

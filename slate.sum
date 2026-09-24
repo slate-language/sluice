@@ -1,5 +1,6 @@
 github.com/slate-language/logger v0.1.0 sha256:ffa84e1b6103cb12c195b53760fdd85dea101367888fd1a6c7ae959f9d5d776c
 github.com/slate-language/logger v0.2.0 sha256:1f74a0b14bffdced462d2bca74c1b8ef437fb0d439c436b0c009953df2bcc45f
+github.com/slate-language/logger v0.2.1 sha256:2719f5feb6c2e0e3e97cee7b91f5ccea42f78177551bcbe1c8718dc5e7166ab2
 github.com/slate-language/pg v0.3.0 sha256:5048bc1470bd21ffce5ab5de4dfcdc34c72e468fd09e4b4f07913d6254fe2796
 github.com/slate-language/pg v0.5.0 sha256:4535b6c93432ffe419b659416b3d6b0ef86f44ae7be353e3f9d46cc80d113adf
 github.com/slate-language/pg v0.7.0 sha256:ddf94c2d5b4a4f145854d22fe9374d0284bc75ecfcdd246e994fffeb1228f5d6
