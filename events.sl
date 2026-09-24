@@ -103,8 +103,14 @@ export makeHub(options: object = {}) -> object
 
         var out = []
 
+        // **An event whose id does not number is never newer than anything**, so it is left out
+        // rather than compared. Every id in the ring is one `identified` wrote, so this is not a
+        // case that arises -- but `numbered` answers `null` for text it cannot read, and a
+        // comparison with `null` would fault where skipping costs nothing.
         for one in topics[topic].ring
-            if numbered(one.id) > after then push(out, one)
+            val n = numbered(one.id)
+
+            if n != null && n > after then push(out, one)
 
         out
 

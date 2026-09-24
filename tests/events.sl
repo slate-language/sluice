@@ -337,6 +337,29 @@ async AN_ID_THIS_HUB_DID_NOT_WRITE_REPLAYS_NOTHING_AND_GOES_LIVE()
         one.close()
 
 @test
+async AN_ID_A_PUBLISHER_WROTE_THAT_DOES_NOT_NUMBER_IS_REPLACED_AND_STILL_REPLAYS()
+    // **The ids in the ring are the hub's**, so an event published with an `id` of its own that is
+    // not a number -- the one input that could put an unnumbered id where replay compares ids --
+    // is given the hub's id and is replayed like any other, rather than faulting the replay or
+    // being lost from it.
+    val feed = hub({ replay: 8 })
+
+    feed.publish("notes", { id: "abc", data: "first" })
+    feed.publish("notes", { id: "", data: "second" })
+
+    val late = feed.subscribe("notes", { lastEventId: "0" })
+
+    val first = (await late.next()).value
+
+    assertEq(first.id, "1")
+    assertEq(first.data, "first")
+
+    val second = (await late.next()).value
+
+    assertEq(second.id, "2")
+    assertEq(second.data, "second")
+
+@test
 async A_REPLAY_LONGER_THAN_THE_BOUND_DROPS_ITS_OLDEST_AND_COUNTS_THEM()
     // **The replay goes through the queue the live events go through**, so one rule about falling
     // behind rather than two: a client whose backlog is bigger than it is willing to hold loses the
