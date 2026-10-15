@@ -17,7 +17,7 @@
 // into a status code rather than a defect. `code` is the SQLSTATE where there was one.
 
 import { api, stack, body, session, memoryStore, logger, requestId, timeout, rateLimit,
-    guardOf, problem, json } from "../../sluice.sl"
+    signedIn, login, logout, problem, json } from "../../sluice.sl"
 
 // What a client may send. **The declaration is the validator** -- `body(NewTask, …)` checks against
 // it and answers a 400 carrying every reason it did not fit.
@@ -87,35 +87,30 @@ answer(f: Failure) = f match
 
 // -- who is asking -------------------------------------------------------------------------------
 
-// **A guard of this application's own**, which is what `guardOf` is for: it is composed like every
-// other one and `api.routes()` prints it by the name given here.
+// **`signedIn(load)` is the guard that wants somebody**: it reads the id `login` put in the session,
+// asks `load` for the user, and hands the handler `req.user` -- or answers a `401` problem without
+// calling it. `load` is where a real application asks its users table, and answers `null` for
+// somebody deleted since they signed in; here a user is nothing but a name.
 //
-// **A guard refuses the way a handler does**: it may answer a problem document directly, as this one
-// does and as `bearer`'s own 401 does, or it may return one of `Failure`'s variants and let the
-// application's mapping say what that is as HTTP. The mapping is applied at every level of a route's
-// composition, so whichever it answers, a `logger` above it reports the status the client was really
-// given. This one is a problem document because "there is nobody logged in" is not a failure of the
-// task store, which is what `Failure` here is about.
-val needsSession = guardOf("needsSession", (h) -> (req) -> ifSomebody(h, req))
-
-ifSomebody(h, req) = if req.session.value == null then anybody() else h(req)
-
-anybody() -> object = problem(401, "Unauthorized", "this asks for a session")
+// **A refusal is a problem document and not one of `Failure`'s variants** because "there is nobody
+// signed in" is not a failure of the task store, which is what `Failure` here is about. An
+// application that wanted it mapped would pass `{ refuse: NotSignedIn }` and add the arm.
+val needsSession = signedIn((id) -> { name: id })
 
 // A login as trivial as a login gets: one password, and the user's name is whatever they said.
 //
 // **A real one asks something that can say no** -- a directory, a password column, an identity
-// provider -- and answers exactly the same way. What matters here is that `req.session.set` is what
-// writes the cookie, and that the handler answering is not the one building it.
+// provider -- and answers exactly the same way. What matters here is that `login` is what writes the
+// cookie, and that the handler answering is not the one building it.
 signIn(password: string, req: object) -> object
     if req.body.password != password then return problem(401, "Unauthorized", "that is not the password")
 
-    req.session.set({ user: req.body.user })
+    login(req, { id: req.body.user })
 
     json({ ok: true })
 
 signOut(req: object) -> object
-    req.session.destroy()
+    logout(req)
 
     json({ ok: true })
 

@@ -33,6 +33,8 @@ import { makeApi, stack as makeStack, lazy } from "./api.sl"
 import { problemResponse, jsonResponse, asResponse } from "./response.sl"
 import { bodyGuard, queryGuard, bearerGuard, corsGuard, loggerGuard, guard, labelOf } from "./guards.sl"
 import { sessionGuard, csrfGuard } from "./sessions.sl"
+import { signIn, signOut, signedInGuard, rememberGuard, canGuard, namedPolicy } from "./auth.sl"
+import { makeTokens } from "./tokens.sl"
 import { requestIdGuard, timeoutGuard, rateLimitGuard, rateStore as makeStore } from "./operations.sl"
 import { multipartGuard } from "./multipart.sl"
 import { drainServer, onShutdown as watchSignals } from "./lifecycle.sl"
@@ -193,6 +195,48 @@ export memoryStore(options: object = {}) -> object = makeMemoryStore(options)
 //
 // `options` takes `name` (`"csrf"`) and `header` (`"x-csrf-token"`).
 export csrf(options: object = {}, handler = null) = applied(csrfGuard(options), handler)
+
+// -- signing in, and being allowed -------------------------------------------------------------------
+
+// `login(req, user, options)` -- sign `user` in on this request's session.
+//
+// **Only an id is kept** -- `{ user: idOf(user) }`, `user.id` unless `options.idOf` says otherwise --
+// and the session is started afresh, which with the session guard's own rotation is what closes
+// fixation. `options.remember: true` also issues a remember-me token, which needs `remember` above
+// the handler. Nothing is written until the handler has answered.
+export login(req: object, user, options: object = {}) -> null = signIn(req, user, options)
+
+// `logout(req)` -- end the session, and the remember-me token with it where there is one.
+export logout(req: object) -> null = signOut(req)
+
+// `signedIn(load, handler, options)` -- the user the session names, on `req.user`, or a refusal.
+//
+// `load(id)` answers the user or `null`, and may answer a promise. A refusal is a `401` problem, or a
+// `303` to `options.redirect`, or `options.refuse` answered exactly as given -- one of the
+// application's own failure variants, which `api.failures` maps. A `null` from `load` ends the
+// session too.
+export signedIn(load: function, handler = null, options: object = {}) =
+    applied(signedInGuard(load, options), handler)
+
+// `remember(store, options, handler)` -- the remember-me cookie: a split token, only a hash of it
+// stored, rotated on every use, and a stale one presented ending the whole series as a theft.
+//
+// It goes between `session` and `signedIn`, and acts only where the session names nobody. `options`
+// takes `name` (`"remember"`), `maxAge` in seconds (30 days), `onTheft(userId)`, `now`, and the
+// session's cookie attributes.
+export remember(store: object, options: object = {}, handler = null) =
+    applied(rememberGuard(store, options), handler)
+
+// `tokens(store, options)` -- opaque API tokens: `{ issue(userId, { name, expiresIn }), verify,
+// revoke }`. `verify` is what `bearer` takes. `options` takes `prefix` (`"oat_"`), `load` and `now`.
+export tokens(store: object, options: object = {}) -> object = makeTokens(store, options)
+
+// `can(policy, handler)` -- the handler where `policy(req)` answers `true`; a `403` problem where it
+// answers `false`; and anything else it answers, a failure variant included, as the refusal itself.
+export can(check: function | object, handler = null) = applied(canGuard(check), handler)
+
+// `policy(name, check)` -- a policy that `api.routes()` prints as `can(name)`.
+export policy(name: string, check: function) -> object = namedPolicy(name, check)
 
 // `hub(options)` -- an event hub: `publish(topic, value)`, `subscribe(topic, options)`,
 // `count(topic)`, `open()` and `endAll(options)`.

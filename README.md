@@ -91,6 +91,9 @@ request("GET", "/notes", { address: "203.0.113.7" })
 | `logger(sink, handler, options)` | `sink({ method, path, status, ms, address })` once the answer is known |
 | `session(secret, options, handler)` | a signed cookie carrying the session itself — or, with a `store`, a signed id into one — on `req.session` |
 | `csrf(options, handler)` | the double-submit token, and a `403` problem without it |
+| `signedIn(load, handler, options)` | the user the session names, loaded, on `req.user`; a `401` problem, a redirect, or the application's own refusal otherwise |
+| `remember(store, options, handler)` | a remember-me cookie that signs its holder back in once the session has gone |
+| `can(policy, handler)` | the handler where `policy(req)` says so; a `403` problem, or the policy's own refusal, otherwise |
 | `requestId(options, handler)` | one name for this request, on `req.id` and on the answer |
 | `timeout(ms, options, handler)` | a `503` problem where the handler is taking too long |
 | `rateLimit(options, handler)` | a fixed window per key, and `429` with a `Retry-After` over it |
@@ -483,6 +486,193 @@ problem. The comparison is `slate:crypto`'s `timingSafeEqual`. `options` takes `
 
 **This is the one cookie deliberately not `HttpOnly`**, and the whole double-submit argument rests on
 it: a page has to be able to read the token to send it back.
+
+## Signing in
+
+**Who is signed in is one member of the session `session(…)` already keeps**, so there is no second
+cookie and no second store: `login` writes `{ user: id }` into it, `logout` ends it, and `signedIn`
+reads it back.
+
+```slate
+import { api, stack, session, signedIn, login, logout, body, json, memoryStore } from sluice
+
+val known = session(Secret, { store: memoryStore(), maxAge: 86400 })
+
+app.post("/signin", known(body(Credentials, (req) -> signingIn(req))))
+app.post("/signout", known((req) -> signingOut(req)))
+app.get("/me", stack([known, signedIn(findUser)])((req) -> json(req.user)))
+
+async signingIn(req)
+    val user = await checkPassword(req.body.name, req.body.password)
+
+    if user == null then return problem(401, "Unauthorized", "that name and password do not go together")
+
+    login(req, user)
+
+    json({ ok: true })
+
+signingOut(req)
+    logout(req)
+
+    json({ ok: true })
+```
+
+**`login(req, user, options)` keeps only an id** — `user.id`, or whatever `options.idOf(user)`
+answers — and `signedIn` asks `load(id)` for the user on every request. A record copied into a
+session goes stale the moment somebody edits it; an id does not.
+
+**A login starts a fresh session**, so nothing in the session from before it — planted or not —
+survives into the one the user is signed in under. Read what you want to keep (where to go back to,
+say) before calling `login`, and carry it across yourself. With a store, the session guard writes the
+new session under a new id and deletes the old one; with a signed cookie, the new session is a new
+cookie and the old one goes on saying what it said. **Either way session fixation is closed**: an
+attacker who planted a session in somebody's browser before they signed in holds a cookie that is
+still nobody afterwards. Both modes are tested.
+
+**Nothing is written until the handler has answered**, which is `req.session.set`'s own rule: a
+handler that faults after calling `login` has signed nobody in.
+
+**`signedIn(load, handler, options)` refuses three ways**, by what the route is:
+
+| | |
+|---|---|
+| nothing | a `401` problem document — what an API wants |
+| `{ redirect: "/signin" }` | a `303 See Other` there — what a page wants |
+| `{ refuse: NotSignedIn("post") }` | that value, answered exactly as given — one of your own failure variants, which goes through `api.failures` and is covered by the exhaustiveness check |
+
+`load(id)` may answer a promise, and **answers `null` for a user who is gone** — deleted, banned, or
+whatever the application means by it. That refuses the request and ends the session too, so the
+cookie stops costing a lookup. A session that names nobody — one a program keeps for a cart, say — is
+nobody to `signedIn` rather than a fault.
+
+**The `401` carries no `WWW-Authenticate`**, unlike `bearer`'s: there is no registered scheme for "a
+cookie the server set", and a challenge no client can answer is not one.
+
+`signedIn`, `login` and `logout` with no `session` above them are a program put together wrong, and
+fault rather than refusing every request for a reason no client could do anything about.
+
+## Remember me
+
+**A long-lived cookie that signs its holder back in once the session has gone.** It sits between
+`session` and `signedIn`, and `login` issues one when asked:
+
+```slate
+val remembered = memoryStore()
+val known = stack([session(Secret, { store: sessions }), remember(remembered, { onTheft: endAllSessions })])
+
+app.post("/signin", known(body(Credentials, (req) -> signingIn(req))))
+app.get("/me", known(signedIn(findUser, (req) -> json(req.user))))
+
+// in signingIn:
+login(req, user, { remember: req.body.remember })
+```
+
+**The scheme is the split token**, as Paragon Initiative describe it in [*Implementing Secure User
+Authentication in PHP Applications with Long-Term
+Persistence*](https://paragonie.com/blog/2015/04/secure-authentication-php-with-long-term-persistence),
+with the rotation and the theft rule of Barry Jaspan's *Improved Persistent Login Cookie Best
+Practice* (2006):
+
+- **The cookie is `selector.validator`.** The selector is what the store is keyed by and says nothing;
+  the validator is 256 random bits, and **the store keeps only its SHA-256** — so a copy of the store
+  signs nobody in.
+- **The one comparison is `timingSafeEqual`** over the validator's hash. The lookup by selector is not
+  a comparison of anything secret.
+- **It is rotated every time it is used**: the selector stays and the validator is replaced, so a
+  selector names a series of tokens of which only the newest is good. Each use also renews the
+  token's `maxAge`, so somebody who comes back every week stays remembered.
+- **A good selector with a stale validator is theft.** The only way to present a validator the series
+  has moved past is to have copied the cookie, so the whole series is deleted — the thief and the
+  victim are both signed out of it — and `onTheft(userId)` is called. **A store of three functions
+  cannot list a user's sessions**, so ending the thief's session as well is the application's, and
+  that callback is where it does it.
+
+**It does nothing while the session names somebody**, so an ordinary request never touches its store.
+**The rotation is written after the handler answers**, so a handler that faults leaves the series as
+it was rather than on a validator the browser never received — which the next request would read as a
+theft.
+
+**`login` always settles it, one way or the other**: `{ remember: true }` issues a new series, and a
+login without it forgets whatever token the browser had, so a token left on a shared computer cannot
+sign its owner back in on the next person's browser. `logout` forgets it in the store and in the
+browser.
+
+`options` takes `name` (`"remember"`), `maxAge` in seconds (30 days), `onTheft`, `now` — a clock in
+milliseconds, for tests — and the session's cookie attributes, with the same safe defaults. The store
+is the session store's three functions, and `memoryStore()` is one.
+
+**One thing it cannot tell from a theft**: two requests sent at once with the same cookie — the
+first rotates the series and the second presents the validator it replaced. A page that fires
+parallel requests on its first load after the session has gone should let one of them go first.
+
+## API tokens
+
+**Opaque access tokens for a client that is not a browser**: issued once, kept as a hash, revocable,
+and checked by `bearer` with nothing in between.
+
+```slate
+import { api, bearer, tokens, memoryStore, json } from sluice
+
+val keys = tokens(memoryStore(), { load: findUser })
+
+app.post("/tokens", known(signedIn(findUser, (req) -> issued(req))))
+app.get("/notes", bearer(keys.verify, (req) -> notesOf(req.user)))
+
+async issued(req)
+    val made = await keys.issue(req.user.id, { name: "laptop", expiresIn: 90 * 86400 })
+
+    json(made, 201)
+```
+
+**`issue(userId, { name, expiresIn })` answers `{ token, id, name, expiresAt }`**, and `token` is the
+only copy of the plaintext there will ever be — show it once. `expiresIn` is in seconds, and a token
+with none lasts until it is revoked; `expiresAt` is milliseconds since the epoch or `null`.
+
+**A token is `oat_<selector>.<validator>`** — the remember-me cookie's split token again, so the store
+holds a SHA-256 of the validator and never the token. The prefix is what lets a secret scanner find one
+in a log or a commit; `options.prefix` changes it.
+
+**`verify(token)` is the result `bearer` takes**: `{ ok: true, value }`, where `value` is the user id,
+or what `options.load(id)` answers for it, or `{ ok: false, error }`. **A token that is malformed,
+unknown, revoked, tampered with or expired is one refusal**, `that token is not valid`, so somebody
+guessing learns nothing about which half was right. The expiry is checked here as well as given to the
+store as its `ttl`, so a store that keeps no ttl cannot keep a token alive.
+
+**`revoke(id)` takes the `id` or the whole token**, so a page listing somebody's tokens and a client
+giving one up both have something to pass.
+
+## Authorization with `can`
+
+**`can(policy, handler)` runs the handler where `policy(req)` says so.** A policy is a function of
+the request — by the time it runs, `req.user`, `req.params` and `req.body` are all there — and may
+answer a promise:
+
+```slate
+async ownsNote(req)
+    val note = await notes.find(req.params.id)
+
+    if note == null then return NoSuchNote(req.params.id)
+
+    note.owner == req.user.id
+
+app.delete("/notes/:id", stack([known, signedIn(findUser), can(policy("ownsNote", ownsNote))])(remove))
+```
+
+| `policy(req)` answers | |
+|---|---|
+| `true` | the handler runs |
+| `false` | a `403` problem document |
+| anything else | that, as the refusal — one of your failure variants, mapped by `api.failures`, or a response |
+
+**A refusal that is a failure variant is checked like any other**: it goes through the application's
+mapping at the level it was returned, so a `logger` above `can` reports the status the client was
+sent, and leaving the variant out of the mapping is a compile error.
+
+**`null` is a fault**, being what a policy that forgot to answer answers; refusing on it would tell
+every client it may not over a defect.
+
+**`policy(name, check)` names one**, because a slate function knows no name of its own: `can(ownsNote)`
+prints in `api.routes()` as `can`, and `can(policy("ownsNote", ownsNote))` as `can(ownsNote)`.
 
 ## Upgrading from 0.5.0
 

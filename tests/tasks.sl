@@ -322,7 +322,7 @@ async A_ROUTE_SAYS_WHICH_GUARDS_IT_RUNS_UNDER()
         seen[r.method + " " + r.path] = r.guards
 
     assertEq(seen["GET /tasks"],
-        ["requestId", "logger", "timeout(2000ms)", "rateLimit", "session", "needsSession"])
+        ["requestId", "logger", "timeout(2000ms)", "rateLimit", "session", "signedIn"])
     assertEq(seen["POST /tasks"],
-        ["requestId", "logger", "timeout(2000ms)", "rateLimit", "session", "needsSession", "body(NewTask)"])
+        ["requestId", "logger", "timeout(2000ms)", "rateLimit", "session", "signedIn", "body(NewTask)"])
     assertEq(seen["GET /health"], [])

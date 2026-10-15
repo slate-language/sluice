@@ -18,7 +18,8 @@
 // read the same way. A new refusal added with no case here is one this file cannot see, which is why
 // each case names its site.
 
-import { api, body, query, bearer, csrf, multipart, timeout, rateLimit, request } from "../sluice.sl"
+import { api, body, query, bearer, csrf, multipart, timeout, rateLimit, session, signedIn, can,
+    request } from "../sluice.sl"
 import { doc, status, header } from "./support.sl"
 
 type Paging = { page: string }
@@ -249,6 +250,22 @@ async unwell()
 
     await app.handle(request("GET", "/health"))
 
+// `signedIn`: a session that names nobody.
+async nobodySignedIn()
+    val app = api()
+
+    app.get("/me", session("a secret", {}, signedIn((id) -> null, (req) -> "me")))
+
+    await app.handle(request("GET", "/me"))
+
+// `can`: a policy that said no.
+async notAllowed()
+    val app = api()
+
+    app.get("/notes/1", can((req) -> false, (req) -> "the note"))
+
+    await app.handle(request("GET", "/notes/1"))
+
 // Every one of them, each named by the site that builds it.
 cases() -> array =
     [{ where: "api: no route", make: noRoute, status: 404 },
@@ -269,7 +286,9 @@ cases() -> array =
      { where: "multipart: accept refused a file", make: refusedFile, status: 415 },
      { where: "timeout: no answer in time", make: tooSlow, status: 503 },
      { where: "rateLimit: over the allowance", make: overTheLimit, status: 429 },
-     { where: "health: a check with reasons", make: unwell, status: 503 }]
+     { where: "health: a check with reasons", make: unwell, status: 503 },
+     { where: "signedIn: nobody signed in", make: nobodySignedIn, status: 401 },
+     { where: "can: the policy said no", make: notAllowed, status: 403 }]
 
 @test
 async NO_PROBLEM_DOCUMENT_THIS_PACKAGE_EMITS_CARRIES_A_STANDARD_MEMBERS_NAME_AS_AN_EXTENSION()
@@ -312,7 +331,9 @@ async EVERY_EXTENSION_MEMBER_IS_NAMED_AND_NONE_OF_THEM_IS_A_STANDARD_ONE()
                       "multipart: accept refused a file": ["field", "filename", "mediaType"],
                       "timeout: no answer in time": [],
                       "rateLimit: over the allowance": [],
-                      "health: a check with reasons": ["reasons"] })
+                      "health: a check with reasons": ["reasons"],
+                      "signedIn: nobody signed in": [],
+                      "can: the policy said no": [] })
 
 @test
 async AN_EXTENSION_MEMBER_CALLED_type_REALLY_DOES_REPLACE_THE_DOCUMENTS_OWN()

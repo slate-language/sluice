@@ -181,7 +181,10 @@ expiryOf(options: object) =
 // header only where it is set. A server terminating TLS itself, with nothing in front of it to read a
 // header from, says so by passing `{ secure: true }` -- the same "the host is an option" seam every
 // operational guard uses -- and that passes straight through the loop below.
-cookieOptions(options: object, req: object) -> object
+//
+// **Exported for `auth.sl`'s remember-me cookie**, which is the same kind of cookie and takes the same
+// defaults: one place decides what a cookie of this package's looks like.
+export cookieOptions(options: object, req: object) -> object
     val trustProxy = options.trustProxy ?? false
     var out = { httpOnly: true, sameSite: "Lax", path: "/", secure: overHttps(req, trustProxy) }
 
