@@ -29,7 +29,9 @@
 
 import { sse as eventStream } from slate:http
 
-import { makeApi, stack as makeStack, lazy } from "./api.sl"
+import { makeApi } from "./api.sl"
+import { stack as makeStack, lazy } from "./compose.sl"
+import { flashGuard, goBack } from "./flash.sl"
 import { problemResponse, jsonResponse, asResponse } from "./response.sl"
 import { bodyGuard, queryGuard, bearerGuard, corsGuard, loggerGuard, guard, labelOf } from "./guards.sl"
 import { sessionGuard, csrfGuard } from "./sessions.sl"
@@ -46,9 +48,17 @@ import { request as makeRequest } from "./testing.sl"
 
 // `api(options)` -- a router that composes, refuses in RFC 9457, and answers a response value.
 //
-// `get`, `post`, `put`, `patch`, `delete`, `head`, `options`, `any` and `notFound` take a path and a
-// handler; `failures` takes the shape of what a handler may return instead of a response, and the
-// mapping from it to HTTP; `routes` says what each route runs; `handle` answers a request.
+// `get`, `post`, `put`, `patch`, `delete`, `head`, `options` and `any` take a path, a handler and
+// `{ name }`; `notFound` takes a handler; `failures` takes the shape of what a handler may return
+// instead of a response, and the mapping from it to HTTP; `routes` says what each route runs and what
+// it is called; `handle` answers a request.
+//
+// `group(prefix, guards, (r) -> …, { name })` adds the routes `r` is given under a prefix, with the
+// group's guards outside their own and its name in front of theirs; groups nest. `resource(path,
+// controller, options)` adds a controller's `index`, `create`, `store`, `show`, `edit`, `update` and
+// `destroy` at their conventional methods and paths, named `<name>.<action>`. `url(name, params,
+// query)` builds a named route's path back, percent-encoded -- and an unknown name or a missing
+// parameter is a fault, being the program's own mistake.
 //
 // **`onFault` is the one option**: a handler that faults answers `500` and the fault is put back on
 // the loop afterwards, which stops the program the way any other defect does. A test that wants to
@@ -237,6 +247,24 @@ export can(check: function | object, handler = null) = applied(canGuard(check), 
 
 // `policy(name, check)` -- a policy that `api.routes()` prints as `can(name)`.
 export policy(name: string, check: function) -> object = namedPolicy(name, check)
+
+// -- forms -------------------------------------------------------------------------------------------
+
+// `flash(handler)` -- one-request messages: `req.flash.messages` is what the previous request set, and
+// `req.flash.set(key, value)` is what the next one will see. It goes directly under `session`, whose
+// value carries the messages for exactly one request.
+export flash(handler = null) = applied(flashGuard(), handler)
+
+// `back(req, fallback)` -- a `303` to the same-origin page in the `Referer`, path and query only, or to
+// `fallback`. **A `Referer` naming another host is never followed.**
+//
+//     req.flash.set("errors", reasons)
+//     req.flash.set("old", req.body)
+//
+//     back(req, "/notes/new")
+export back(req: object, fallback: string) -> object = goBack(req, fallback)
+
+// -- events ------------------------------------------------------------------------------------------
 
 // `hub(options)` -- an event hub: `publish(topic, value)`, `subscribe(topic, options)`,
 // `count(topic)`, `open()` and `endAll(options)`.

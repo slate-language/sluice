@@ -85,7 +85,7 @@ async routes_SAYS_THE_METHOD_THE_PATH_AND_WHAT_EACH_ONE_RUNS()
     val listed = app.routes()
 
     assertEq(listed.length, 3)
-    assertEq(listed[0], { method: "GET", path: "/notes/:id", guards: [], handler: handler })
+    assertEq(listed[0], { method: "GET", path: "/notes/:id", name: null, guards: [], handler: handler })
     assertEq(listed[1].method, "POST")
     assertEq(listed[1].path, "/notes")
     assertEq(listed[1].guards, ["logger", "bearer", "body(NewNote)"])

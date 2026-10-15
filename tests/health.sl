@@ -121,7 +121,7 @@ async health_IS_A_ROUTE_UNDER_NO_GUARDS_AT_ALL()
 
     app.health()
 
-    assertEq(app.routes(), [{ method: "GET", path: "/health", guards: [], handler: app.routes()[0].handler }])
+    assertEq(app.routes(), [{ method: "GET", path: "/health", name: null, guards: [], handler: app.routes()[0].handler }])
 
 @test
 async ONLY_A_GET_ANSWERS_IT()

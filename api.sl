@@ -2,72 +2,9 @@
 
 import { segments, fit } from "./route.sl"
 import { problemResponse } from "./response.sl"
-import { labelOf } from "./guards.sl"
 import { healthHandler } from "./operations.sl"
 import { drainServer } from "./lifecycle.sl"
-
-// `stack([a, b])` -- the guards composed once, here, rather than a list walked per request.
-//
-// **`stack([a, b])(h)` is `a(b(h))`**: the first in the list is the outermost, so the list reads in
-// the order a request passes through it.
-//
-// **A stack remembers the list it was built from**, which is the one thing an interceptor chain buys
-// over plain composition -- what a route runs can be printed. It costs a field, and `api.routes()`
-// is what spends it.
-export stack(guards: array) -> object
-    var labels = []
-
-    for g in guards
-        push(labels, labelOf(g))
-
-    // **A named function, not a lambda**: a lambda's one-line body is an expression and this one
-    // has statements in it.
-    wrap(h)
-        // **A stack applied to something already wrapped takes its guards on**, so a route's list
-        // is what a request actually passes through however it was spelled.
-        //
-        // **The guards themselves are kept beside their names**, which is what lets `api.add` put
-        // the failure mapping under them rather than over them -- see `mapped`.
-        val inner = if h is object && has(h, "guards") then h.guards else []
-        val under = if h is object && has(h, "wrappers") then h.wrappers else []
-        val deepest = if h is object && has(h, "handler") then h.handler else h
-
-        { new: lazy(guards, h),
-          guards: concat(labels, inner),
-          wrappers: concat(guards, under),
-          handler: deepest }
-
-    { new: wrap, guards: labels, wrappers: guards }
-
-// The guards composed: `compose([a, b], h)` is `a(b(h))`.
-export compose(guards: array, h)
-    var composed = h
-    var i = guards.length - 1
-
-    while i >= 0
-        val g = guards[i]
-
-        composed = g(composed)
-        i = i - 1
-
-    composed
-
-// The same composition, put off until something actually calls it and done once.
-//
-// **A stack applied to a handler is a working handler in its own right** -- `serve(port,
-// stack([…])(h))` is an ordinary thing to write -- but an `api` composes the list again around the
-// failure mapping, and a guard whose construction costs anything should not pay for both. So the
-// eager composition here would be work nobody asked for, and this is the version that is not done
-// until it is wanted.
-export lazy(guards: array, h) -> function
-    var ready = null
-
-    run(req)
-        if ready == null then ready = compose(guards, h)
-
-        ready(req)
-
-    run
+import { routesIn, pathFor } from "./routing.sl"
 
 // `api()` -- a router that composes, refuses in RFC 9457, and answers a value.
 //
@@ -97,13 +34,44 @@ export makeApi(options: object) -> object
 
     val onFault = if has(options, "onFault") then options.onFault else null
 
-    add(method: string, path: string, h)
+    // **What a route is called, and the path it was added under** -- the table `url` builds from.
+    var names = {}
+
+    // `options.name` is the one option a route takes: what `url` and `routes()` call it.
+    //
+    // **A name is refused where it is already taken**, at the line that added the second route: two
+    // routes answering to one name would leave `url` building whichever was added last, which is a
+    // link to the wrong page that nothing would ever report.
+    add(method: string, path: string, h, options: object = {})
+        val name = nameIn(options)
+
+        if name != null && has(names, name)
+            val was = names[name]
+
+            throw "the route name `" + name + "` is taken -- " + was.method + " " + was.path + " has it already"
+
+        val run = composed(h)
+
+        if name != null then names[name] = { method: shown(method), path: path }
+
         push(routes, { method: method,
                        path: path,
+                       name: name,
                        parts: segments(path),
-                       run: composed(h),
+                       run: run,
                        guards: labelsOf(h),
                        handler: deepestOf(h) })
+
+        null
+
+    // `url(name, params, query)` -- the path of the route of that name.
+    //
+    // **An unknown name and a missing parameter are FAULTS**: both are the program's own mistake, and
+    // a link built anyway would be a 404 that nothing points back at.
+    url(name: string, params: object = {}, query: object = {}) -> string
+        if !has(names, name) then throw "there is no route named `" + name + "`"
+
+        pathFor(names[name].path, name, params, query)
 
     // A route's handler, with the failure mapping applied AT EVERY LEVEL of the composition:
     // around the handler, and again around each guard.
@@ -350,14 +318,21 @@ export makeApi(options: object) -> object
     drain(server, options: object = {}) =
         drainServer(server, options with { inflight: countInFlight, stop: startDraining })
 
-    { get: (p, h) -> add("GET", p, h),
-      post: (p, h) -> add("POST", p, h),
-      put: (p, h) -> add("PUT", p, h),
-      patch: (p, h) -> add("PATCH", p, h),
-      delete: (p, h) -> add("DELETE", p, h),
-      head: (p, h) -> add("HEAD", p, h),
-      options: (p, h) -> add("OPTIONS", p, h),
-      any: (p, h) -> add("", p, h),
+    // **The api IS the outermost group** -- no prefix, no guards, no name prefix -- so a route added
+    // here and one added inside `group` go through one function and cannot drift.
+    val top = routesIn(add, "", [], "")
+
+    { get: top.get,
+      post: top.post,
+      put: top.put,
+      patch: top.patch,
+      delete: top.delete,
+      head: top.head,
+      options: top.options,
+      any: top.any,
+      group: top.group,
+      resource: top.resource,
+      url: url,
       health: addHealth,
       notFound: setFallback,
       failures: setFailures,
@@ -371,10 +346,23 @@ export makeApi(options: object) -> object
 // One row of `api.routes()`. **`handler` is the function itself** rather than a name, slate
 // functions having none -- what is printable is the method, the path and the guards.
 described(r) -> object =
-    { method: if r.method == "" then "ANY" else r.method,
+    { method: shown(r.method),
       path: r.path,
+      name: r.name,
       guards: r.guards,
       handler: r.handler }
+
+// A method as a person reads it: `any` is the empty method, and prints as `ANY`.
+shown(method: string) -> string = if method == "" then "ANY" else method
+
+// The name a route was given, or `null`.
+nameIn(options: object) -> string | null
+    if !has(options, "name") || options.name == null then return null
+
+    if !(options.name is string) || options.name == ""
+        throw "a route's `name` is a non-empty string, and this is not one"
+
+    options.name
 
 // **A named function because `throw` is a statement**, so a lambda cannot be one.
 rethrow(e)

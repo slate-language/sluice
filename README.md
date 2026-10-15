@@ -91,6 +91,7 @@ request("GET", "/notes", { address: "203.0.113.7" })
 | `logger(sink, handler, options)` | `sink({ method, path, status, ms, address })` once the answer is known |
 | `session(secret, options, handler)` | a signed cookie carrying the session itself — or, with a `store`, a signed id into one — on `req.session` |
 | `csrf(options, handler)` | the double-submit token, and a `403` problem without it |
+| `flash(handler)` | one-request messages on `req.flash`, carried in the session — see **Flash and redirecting back** |
 | `signedIn(load, handler, options)` | the user the session names, loaded, on `req.user`; a `401` problem, a redirect, or the application's own refusal otherwise |
 | `remember(store, options, handler)` | a remember-me cookie that signs its holder back in once the session has gone |
 | `can(policy, handler)` | the handler where `policy(req)` says so; a `403` problem, or the policy's own refusal, otherwise |
@@ -673,6 +674,133 @@ every client it may not over a defect.
 
 **`policy(name, check)` names one**, because a slate function knows no name of its own: `can(ownsNote)`
 prints in `api.routes()` as `can`, and `can(policy("ownsNote", ownsNote))` as `can(ownsNote)`.
+
+## Groups
+
+**`app.group(prefix, guards, (r) -> …, options)` adds the routes `r` is given under the prefix, with
+the group's guards outside their own.** `r` has `get`, `post`, `put`, `patch`, `delete`, `head`,
+`options`, `any`, `group` and `resource`, exactly as the api does, so a group inside a group is the
+same call again:
+
+```slate
+adminRoutes(r)
+    r.get("/users", listUsers, { name: "users" })
+    r.group("/reports", [can(policy("auditor", isAuditor))], reportRoutes, { name: "reports" })
+
+app.group("/admin", stack([session(secret), signedIn(findUser)]), adminRoutes, { name: "admin" })
+```
+
+`GET /admin/users` runs `session`, then `signedIn`, then `listUsers`, and is named `admin.users`; a
+report runs all three guards with the auditor policy inside them, and is named `admin.reports.…`.
+
+- **`guards` is a list or a `stack(…)`** — the same list either way — and `[]` is a group that is only
+  a prefix. An enclosing group's guards stay outside an inner group's.
+- **It is composition and nothing else**: a route added through a group is `stack(groupGuards)(h)`
+  added at the joined path, so `api.routes()` prints the whole list it runs and the failure mapping is
+  applied between every layer of it — a `logger` in a group above a route's refusing guard reports
+  the `403` the client got, not `200`.
+- **`options.name` is put in front of every named route inside**, with a dot.
+
+## Resources
+
+**`app.resource(path, controller, options)` adds a controller's actions at the conventional methods
+and paths** — only the actions the controller has:
+
+| action | method | path | name |
+|---|---|---|---|
+| `index` | `GET` | `/notes` | `notes.index` |
+| `create` | `GET` | `/notes/create` | `notes.create` |
+| `store` | `POST` | `/notes` | `notes.store` |
+| `show` | `GET` | `/notes/:id` | `notes.show` |
+| `edit` | `GET` | `/notes/:id/edit` | `notes.edit` |
+| `update` | `PUT` and `PATCH` | `/notes/:id` | `notes.update` |
+| `destroy` | `DELETE` | `/notes/:id` | `notes.destroy` |
+
+```slate
+val notes = { index: list, show: one, store: body(NewNote, create), destroy: remove }
+
+app.resource("/notes", notes, { guards: { "*": [signedIn(findUser)], destroy: [can(owns)] } })
+```
+
+**A controller is an object whose own members are handlers** — a function, or a handler already
+wrapped in guards, which then print after the resource's. A class instance's methods are not members
+of its own, so they are not found; a resource that adds no route at all is a fault for that reason,
+rather than a 404 on every path it was meant to answer.
+
+| option | |
+|---|---|
+| `only`, `except` | the actions to add, or to leave out — one or the other; a name that is not an action is a fault |
+| `apiOnly` | `true` leaves out `create` and `edit`, the two pages only an HTML form wants |
+| `guards` | a list or a `stack(…)` for every action, or an object keyed by action with `"*"` for all |
+| `param` | the parameter's name, `id` by default — `{ param: "slug" }` is `/notes/:slug` |
+| `name` | what the names begin with; the last fixed part of the path otherwise |
+
+**`PATCH` carries no name of its own**: two routes cannot share one, and `url("notes.update", …)`
+builds the same path for both. A resource called on a group takes the group's prefix, guards and name
+prefix like any other route.
+
+## Named routes
+
+**A route takes `{ name }` as a third argument, and `app.url(name, params, query)` builds its path
+back:**
+
+```slate
+app.get("/notes/:id", show, { name: "notes.show" })
+
+app.url("notes.show", { id: "a b" })                 // "/notes/a%20b"
+app.url("notes.show", { id: 7 }, { page: 2 })         // "/notes/7?page=2"
+```
+
+- **Every parameter is percent-encoded** with `slate:http`'s `encodeComponent`, so a value with a
+  slash or a space in it is one segment the route decodes back exactly. A `*rest` keeps its slashes.
+- **The query** leaves out a `null` member and repeats a name for an array.
+- **An unknown name, and a parameter that is missing or empty, are FAULTS** — the program's own
+  mistake, which a link built anyway would turn into a 404 that nothing points back at.
+- **A name already taken is refused where the second route is added**, naming the route that has it.
+- **`api.routes()` carries `name`** on every row, `null` for a route with none.
+
+## Flash and redirecting back
+
+**`flash()` is a guard over the session, and `back(req, fallback)` is a `303` to the page the request
+came from.** Between them they are how a page with forms re-shows one that was refused:
+
+```slate
+val forms = stack([session(secret), flash(), csrf()])
+
+async save(req)
+    if req.body.title == ""
+        req.flash.set("errors", ["a note wants a title"])
+        req.flash.set("old", req.body)
+
+        return back(req, "/notes/new")
+
+    await notes.add(req.body)
+    req.flash.set("notice", "saved")
+
+    back(req, "/notes")
+
+app.post("/notes", forms(save))
+app.get("/notes/new", forms((req) -> page(req.flash.messages)))
+```
+
+- **`req.flash.messages` is what the PREVIOUS request set, and `req.flash.set(key, value)` is what the
+  next one will see.** A message lasts exactly one request: it is taken out of the session on the way
+  through whether anything read it or not, so a reload does not say "saved" twice.
+- **It goes directly under `session`**, and the messages travel in the session value — signed, or in
+  the store, with everything else. What a handler sees as `req.session.value` is the session without
+  them, so `login`, `logout` and `signedIn` are untouched, and a message set beside a `login` or a
+  `logout` still arrives. Without a `session` above it, `flash` is a fault.
+- **A request that sets nothing and carries nothing writes no cookie.**
+
+**`back` follows the `Referer` only where it names this request's own `Host`, and keeps only its path
+and query.** A `Referer` naming another host, one that is not an absolute `http`/`https` URL, a request
+with no `Host`, and a path a browser would read as another host (`//evil.example`, `/\evil.example`)
+all go to `fallback` — a header a client wrote is not a place to send a browser.
+
+## Upgrading from 0.7.0
+
+**No floor change.** `api.routes()`'s rows gain `name` — `null` for a route with none — so a test that
+compares a whole row now writes it. Every route method takes an optional third argument, `{ name }`.
 
 ## Upgrading from 0.5.0
 
