@@ -1110,7 +1110,7 @@ slate examples/tasks/main.sl
 `check/` holds the two hand-run drivers — the exhaustiveness refusal above, and a defect stopping the
 program — and they are not under `tests/` because passing would mean ending the run.
 
-**It needs slate 0.1.27 or later** — the floor moved there for `resource`, which finds a class
+**It needs slate 0.1.28 or later** — the floor moved to 0.1.27 for `resource`, which finds a class
 controller's methods with `in` and calls them as `controller[action](req)`; `in` and a prototype-aware
 `o[k]` came in slate 0.1.23 and a receiver for `o[k](x)` with them. Before that it was slate 0.0.30,
 and everything below this sentence up to the dev dependencies is how it got there. Shape values with `test`/`mismatch`/`name` are what make a

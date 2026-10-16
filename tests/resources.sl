@@ -157,8 +157,6 @@ class ReadOnly
 
 // Inherits `index` and `show` from `Notes`, adds `destroy`, and overrides `show`.
 class Archive from Notes
-    new() = { served: 0, label: "notes", removed: 0 }
-
     destroy(self, req) = json({ action: "destroy", id: req.params.id, label: self.label })
 
     show(self, req) = json({ action: "show", id: req.params.id, label: "archive " + self.label })
@@ -211,7 +209,15 @@ async A_CLASS_WITH_ONLY_SOME_ACTIONS_GETS_ROUTES_FOR_THOSE()
 async A_SUBCLASS_INHERITS_AN_ACTION_AND_MAY_OVERRIDE_ONE()
     val app = api()
 
-    app.resource("/notes", Archive())
+    val archive = Archive()
+
+    // Construction is inherited plainly: an Archive, which is also a Notes, with the base state set.
+    assertEq(archive is Archive, true)
+    assertEq(archive is Notes, true)
+    assertEq(archive.served, 0)
+    assertEq(archive.label, "notes")
+
+    app.resource("/notes", archive)
 
     assertEq(map(app.routes(), (r) -> r.name), ["notes.index", "notes.show", "notes.destroy"])
     // Inherited, and reading the instance's own state through the base class's method.
