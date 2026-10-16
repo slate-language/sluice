@@ -722,10 +722,24 @@ val notes = { index: list, show: one, store: body(NewNote, create), destroy: rem
 app.resource("/notes", notes, { guards: { "*": [signedIn(findUser)], destroy: [can(owns)] } })
 ```
 
-**A controller is an object whose own members are handlers** — a function, or a handler already
-wrapped in guards, which then print after the resource's. A class instance's methods are not members
-of its own, so they are not found; a resource that adds no route at all is a fault for that reason,
-rather than a 404 on every path it was meant to answer.
+**A controller is an object, or an instance of a class, whose members are handlers** — a function, or
+a handler already wrapped in guards, which then print after the resource's. An action exists where
+`action in controller` says so, which follows the prototype, so a method a subclass inherits counts and
+a method the class lacks gets no route (a request for it is a `405` or a `404`, as for any path nobody
+registered). The method is looked up and called as `controller[action](req)` when a request arrives,
+so it runs with the instance as its receiver and reads its own `self`. A resource that adds no route
+at all is a fault, rather than a 404 on every path it was meant to answer.
+
+```slate
+class Notes
+    var served = 0
+
+    index(self, req)
+        self.served += 1
+        json({ served: self.served })
+
+app.resource("/notes", Notes())
+```
 
 | option | |
 |---|---|
@@ -796,6 +810,11 @@ app.get("/notes/new", forms((req) -> page(req.flash.messages)))
 and query.** A `Referer` naming another host, one that is not an absolute `http`/`https` URL, a request
 with no `Host`, and a path a browser would read as another host (`//evil.example`, `/\evil.example`)
 all go to `fallback` — a header a client wrote is not a place to send a browser.
+
+## Upgrading from 0.8.0
+
+**The floor is slate 0.1.27.** `app.resource` takes a class instance as its controller as well as an
+object; nothing written against 0.8.0 changes.
 
 ## Upgrading from 0.7.0
 
@@ -1091,7 +1110,10 @@ slate examples/tasks/main.sl
 `check/` holds the two hand-run drivers — the exhaustiveness refusal above, and a defect stopping the
 program — and they are not under `tests/` because passing would mean ending the run.
 
-**It needs slate 0.0.30 or later.** Shape values with `test`/`mismatch`/`name` are what make a
+**It needs slate 0.1.27 or later** — the floor moved there for `resource`, which finds a class
+controller's methods with `in` and calls them as `controller[action](req)`; `in` and a prototype-aware
+`o[k]` came in slate 0.1.23 and a receiver for `o[k](x)` with them. Before that it was slate 0.0.30,
+and everything below this sentence up to the dev dependencies is how it got there. Shape values with `test`/`mismatch`/`name` are what make a
 declaration the validator and `?` optional keys are what let a request body have one, both from
 0.0.7; 0.0.23 gave `slate:http` the `percentDecode` a path parameter is read with and the manifest
 the `devDependencies` section below; 0.0.24 made a `data` name one of those shape values, which is

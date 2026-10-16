@@ -112,9 +112,11 @@ val ActionNames = ["index", "create", "store", "show", "edit", "update", "destro
 // | `param` | the member routes' parameter, `id` unless this says otherwise |
 // | `name` | what the names begin with; the path's last part otherwise |
 //
-// **A controller is an object whose own members are handlers**, so `{ index: list, show: one }` and
-// `{ store: body(NewNote, create) }` are both controllers and an action's own guards print in
-// `routes()` after the resource's.
+// **A controller is an object, or an instance of a class, whose members are handlers** -- an action
+// exists where `action in controller` says so, which follows the prototype, and it is called as
+// `controller[action](req)` at request time so a method has its instance for `this`. `{ index: list,
+// show: one }` and `{ store: body(NewNote, create) }` are both controllers and an action's own guards
+// print in `routes()` after the resource's.
 resourceIn(on: function, path: string, controller: object, options: object)
     if has(options, "only") && has(options, "except")
         throw "a resource takes `only` or `except`, and this one was given both"
@@ -128,7 +130,7 @@ resourceIn(on: function, path: string, controller: object, options: object)
     val forms = !(has(options, "apiOnly") && options.apiOnly == true)
 
     for a in only
-        if !has(controller, a)
+        if !(a in controller)
             throw "`only` names `" + a + "`, and the controller for " + path + " has no `" + a + "`"
 
     var added = 0
@@ -136,22 +138,34 @@ resourceIn(on: function, path: string, controller: object, options: object)
     for row in Actions
         val wanted = (forms || !row.form) && (only.length == 0 || contains(only, row.action))
 
-        if wanted && !contains(except, row.action) && has(controller, row.action)
+        if wanted && !contains(except, row.action) && row.action in controller
             val guards = concat(shared, byAction[row.action] ?? [])
             val at = memberPath(path, row, param)
             val naming = if row.named then { name: base + "." + row.action } else {}
 
-            on(row.method, at, within(guards, controller[row.action]), naming)
+            on(row.method, at, within(guards, calling(controller, row.action)), naming)
 
             added = added + 1
 
-    // **A resource that adds nothing is a program put together wrong** -- a controller whose actions
-    // are methods of a class rather than members of its own is the likely one, and it would otherwise
-    // be a quiet 404 on every path the resource was meant to answer.
+    // **A resource that adds nothing is a program put together wrong** -- a controller with none of the
+    // seven names would otherwise be a quiet 404 on every path the resource was meant to answer.
     if added == 0
         throw "the resource at " + path + " added no routes: its controller has no member named " + join(ActionNames, ", ")
 
     null
+
+// The handler for one action, looked up on the controller when a request arrives. **`controller[action]`
+// is called as a method**, so the controller is the receiver and `this` is its own state; a method value
+// captured here at registration would be unbound.
+//
+// **A wrapped handler (`stack(…)(h)`, `body(…, h)`) is an object that already knows its guards**, so it is
+// passed on as it is and `routes()` keeps printing them; only a plain function needs the lookup.
+calling(controller: object, action: string)
+    val found = controller[action]
+
+    if !(found is function) then return found
+
+    (req) -> controller[action](req)
 
 // `only` or `except`, checked against the seven names.
 actionsIn(options: object, key: string) -> array

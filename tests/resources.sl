@@ -129,9 +129,125 @@ async A_RESOURCE_IN_A_GROUP_TAKES_THE_PREFIX_AND_THE_NAME_PREFIX()
 
 @test
 A_RESOURCE_THAT_ADDS_NOTHING_IS_A_FAULT()
-    // A class instance's methods are not members of its own, so a controller written that way would
-    // otherwise be a quiet 404 everywhere.
+    // A controller with none of the seven names would otherwise be a quiet 404 everywhere.
     assertFaults(() -> api().resource("/notes", { list: said("index") }), "added no routes")
+
+// -- a class instance as the controller ------------------------------------------------------------
+
+// Every method reads and writes `self`, so a method value captured at registration -- which has lost
+// its receiver -- would fault or answer the wrong thing.
+class Notes
+    var served = 0
+    var label = "notes"
+
+    index(self, req)
+        self.served += 1
+        json({ action: "index", id: null, label: self.label, served: self.served })
+
+    show(self, req)
+        self.served += 1
+        json({ action: "show", id: req.params.id, label: self.label, served: self.served })
+
+// Only two of the seven actions.
+class ReadOnly
+    var label = "read-only"
+
+    index(self, req) = json({ action: "index", id: null, label: self.label })
+    destroy(self, req) = json({ action: "destroy", id: req.params.id, label: self.label })
+
+// Inherits `index` and `show` from `Notes`, adds `destroy`, and overrides `show`.
+class Archive from Notes
+    new() = { served: 0, label: "notes", removed: 0 }
+
+    destroy(self, req) = json({ action: "destroy", id: req.params.id, label: self.label })
+
+    show(self, req) = json({ action: "show", id: req.params.id, label: "archive " + self.label })
+
+async said_by(app: object, method: string, path: string) -> object
+    doc(await app.handle(request(method, path)))
+
+@test
+async A_CLASS_CONTROLLER_S_METHODS_RUN_WITH_THE_INSTANCE_AS_THEIR_RECEIVER()
+    val app = api()
+    val notes = Notes()
+
+    app.resource("/notes", notes)
+
+    assertEq(map(app.routes(), (r) -> r.method + " " + r.path), ["GET /notes", "GET /notes/:id"])
+
+    val first = await said_by(app, "GET", "/notes")
+    val second = await said_by(app, "GET", "/notes/7")
+
+    assertEq(first.action, "index")
+    assertEq(first.label, "notes")
+    assertEq(first.served, 1)
+    assertEq(second.id, "7")
+    // The state the first request changed is the state the second one reads.
+    assertEq(second.served, 2)
+    assertEq(notes.served, 2)
+
+@test
+async A_CLASS_CONTROLLER_IS_LOOKED_UP_WHEN_THE_REQUEST_ARRIVES()
+    val app = api()
+    val notes = Notes()
+
+    app.resource("/notes", notes)
+    notes.label = "renamed"
+
+    assertEq((await said_by(app, "GET", "/notes")).label, "renamed")
+
+@test
+async A_CLASS_WITH_ONLY_SOME_ACTIONS_GETS_ROUTES_FOR_THOSE()
+    val app = api()
+
+    app.resource("/notes", ReadOnly())
+
+    assertEq(map(app.routes(), (r) -> r.name), ["notes.index", "notes.destroy"])
+    assertEq((await said_by(app, "DELETE", "/notes/3")).label, "read-only")
+    assertEq(status(await app.handle(request("GET", "/notes/3"))), 405)
+    assertEq(status(await app.handle(request("POST", "/notes"))), 405)
+
+@test
+async A_SUBCLASS_INHERITS_AN_ACTION_AND_MAY_OVERRIDE_ONE()
+    val app = api()
+
+    app.resource("/notes", Archive())
+
+    assertEq(map(app.routes(), (r) -> r.name), ["notes.index", "notes.show", "notes.destroy"])
+    // Inherited, and reading the instance's own state through the base class's method.
+    assertEq((await said_by(app, "GET", "/notes")).served, 1)
+    // Overridden.
+    assertEq((await said_by(app, "GET", "/notes/4")).label, "archive notes")
+    assertEq((await said_by(app, "DELETE", "/notes/4")).action, "destroy")
+
+@test
+async ONLY_AND_EXCEPT_NARROW_A_CLASS_CONTROLLER_TOO()
+    val app = api()
+
+    app.resource("/notes", Archive(), { except: ["destroy"] })
+
+    assertEq(map(app.routes(), (r) -> r.name), ["notes.index", "notes.show"])
+
+@test
+A_CLASS_CONTROLLER_THAT_LACKS_AN_ONLY_ACTION_IS_A_FAULT()
+    assertFaults(() -> api().resource("/notes", ReadOnly(), { only: ["show"] }), "has no `show`")
+
+@test
+A_CLASS_WITH_NONE_OF_THE_SEVEN_NAMES_ADDS_NOTHING_AND_IS_A_FAULT()
+    assertFaults(() -> api().resource("/notes", Gadget()), "added no routes")
+
+class Gadget
+    var size = 1
+
+    spin(self, req) = json({})
+
+@test
+async A_PLAIN_OBJECT_CONTROLLER_STILL_WORKS_WITHOUT_A_RECEIVER()
+    val app = api()
+
+    app.resource("/notes", { show: said("show") })
+
+    assertEq(await ran(app, "GET", "/notes/7"), "show")
 
 @test
 MISTAKES_IN_THE_OPTIONS_ARE_FAULTS()
