@@ -847,6 +847,11 @@ and query.** A `Referer` naming another host, one that is not an absolute `http`
 with no `Host`, and a path a browser would read as another host (`//evil.example`, `/\evil.example`)
 all go to `fallback` — a header a client wrote is not a place to send a browser.
 
+## Upgrading from 0.9.1
+
+**No floor change.** `asset(body, type)` is new: a fixed text served at a content-hashed path with a
+year-long immutable `Cache-Control` and a weak `ETag`. Nothing written against 0.9.1 changes.
+
 ## Upgrading from 0.8.0
 
 **The floor is slate 0.1.27.** `app.resource` takes a class instance as its controller as well as an
