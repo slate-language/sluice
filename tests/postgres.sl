@@ -87,6 +87,9 @@ async opened(replies: object, seen: array) -> object
                                 password: "pencil",
                                 database: "tasks" })
 
+    // **A store that did not open says why here**, rather than as "`ping` is not something
+    // undefined can do" one line into the test that reached for `made.value`.
+    assert(made.ok, "the store did not open against the fake server: " + (made.error ?? ""))
     { fake: fake, made: made }
 
 // What every test here answers with once it is done.

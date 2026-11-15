@@ -125,7 +125,10 @@ async A_TOKEN_THAT_IS_WRONG_ANY_WAY_AT_ALL_IS_ONE_REFUSAL()
     val it = made()
     val good = await it.keys.issue("1")
     val at = indexOf(good.token, ".")
-    val tampered = good.token[0..<(at + 1)] + "A" + good.token[(at + 2)..]
+    // The swapped character must DIFFER from the one it replaces: a validator starting with `A`
+    // (one in 64) would otherwise be "tampered" into itself and accepted.
+    val was = good.token[(at + 1)..<(at + 2)]
+    val tampered = good.token[0..<(at + 1)] + (if was == "A" then "B" else "A") + good.token[(at + 2)..]
     val other = good.token[0..<(at + 1)] + good.token[(at + 1)..] + "x"
 
     for bad in [tampered, other, "oat_nothing", "oat_.x", "oat_x.", "nope_" + good.token[4..],
