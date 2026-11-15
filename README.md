@@ -295,6 +295,42 @@ handler sees any of it, and finding the delimiters is a scan of every byte of it
 where that stops. `slate:http` parses no multipart body and says the parsing is the program's; this is
 that parsing, for the uploads a whole-body read is the right shape for.
 
+## A content-hashed asset
+
+**`asset(body, type)` answers one fixed text at an address that changes whenever the text does** —
+`app.<hash>.css`, `bundle.<hash>.js` — which is the one kind of response a browser may keep for a
+year without asking again:
+
+```slate
+app.get("/assets/app.3f9a1c2b7d4e.css", asset(css, "text/css; charset=utf-8"))
+```
+
+- **`Cache-Control: public, max-age=31536000, immutable`.** A year is what every cache reads as
+  "never expires", and `immutable` (RFC 8246) is what stops a browser asking again when the reader
+  reloads the page.
+- **A WEAK `ETag`**, the SHA-256 of the body in base64url, taken once when the route is added.
+  `slate:http` compresses on the way out with whichever of zstd and brotli the client takes, so the
+  bytes on the wire are not one sequence and a strong tag would claim they were.
+- **`If-None-Match` naming the tag — weakly, as RFC 9110 compares that header — or `*` is a `304`**
+  with the tag and the `Cache-Control` and no body. Anything else is the whole body again.
+- **Only for a content-hashed address.** Served at a fixed one, a year of `immutable` keeps the old
+  text in every browser that saw it; that is what `files(root)` and its `max-age` are for.
+
+**[lath](https://github.com/slate-language/lath)'s `serveAppSheet()` answers exactly such a file** —
+an app's bare-imported stylesheets joined into one — and the glue is the route:
+
+```slate
+import { serveAppSheet } from lath
+import { asset } from sluice
+
+val sheet = serveAppSheet()
+app.get(sheet.path, asset(sheet.css, sheet.type))
+```
+
+Add it ahead of a catch-all such as `/assets/*rest`, routes being matched in the order they were
+added. **sluice does not depend on lath**: it takes text and a media type, and the program that has
+both is the one that joins them.
+
 ## Health, and stopping
 
 **`app.health(path, check)` is a route convention rather than a guard**, and it has to be: the thing

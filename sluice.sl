@@ -43,6 +43,7 @@ import { drainServer, onShutdown as watchSignals } from "./lifecycle.sl"
 import { makeMemoryStore } from "./store.sl"
 import { makeHub, lastSeenId } from "./events.sl"
 import { request as makeRequest } from "./testing.sl"
+import { assetHandler } from "./assets.sl"
 
 // -- the api -----------------------------------------------------------------------------------------
 
@@ -351,6 +352,18 @@ export json(value, status: integer = 200) -> object = jsonResponse(value, status
 // `response(v)` -- any answer as `{ status, headers, body }`, which is what a guard needs that means
 // to read a status or add a header.
 export response(v) -> object = asResponse(v)
+
+// `asset(body, type)` -- a handler answering one fixed text at a CONTENT-HASHED path: cached for a
+// year and `immutable`, with a weak `ETag` and a `304` for a client that already has it.
+//
+// **Only for an address that changes when the text does** -- `app.<hash>.css` -- which is what makes
+// a year safe. `lath`'s `serveAppSheet()` answers one, and the glue is one route:
+//
+//     val sheet = serveAppSheet()
+//     app.get(sheet.path, asset(sheet.css, sheet.type))
+//
+// Compression is `slate:http`'s, as for every response.
+export asset(body: string, type: string) -> function = assetHandler(body, type)
 
 // -- testing -----------------------------------------------------------------------------------------
 
