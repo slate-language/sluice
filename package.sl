@@ -23,6 +23,6 @@
     // `logger` 0.2.1 is the first that slate 0.1.6's checker accepts.
     devDependencies: {
         logger: { git: "github.com/slate-language/logger", version: "0.2.1" },
-        pg: { git: "github.com/slate-language/pg", version: "0.7.0" },
+        pg: { git: "github.com/slate-language/pg", version: "0.8.0" },
     },
 }
