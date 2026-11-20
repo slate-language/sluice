@@ -5,12 +5,10 @@
 // over a real socket and reads what it actually sent -- the statements, the parameters, the SQLSTATE
 // a unique violation comes back as, and the columns as the types they were read into.
 //
-// **`slate:net` is not on the JavaScript back end**, so nothing here can run under `slate test --js`:
-// the names import and say *"not in the JavaScript back end yet"* when a program reaches them.
-// **Every test here therefore ends in a `skip` on that host**, which slate 0.0.30 gave the runner --
-// a third verdict beside a pass and a failure, said on the line where a passing test's timing goes
-// and counted on the last line of the run. Until then a test left out on one host `return`ed, which
-// is a PASS: nine of them, green, having asserted nothing at all.
+// **Every test here runs on both hosts**, `slate:net` being on the JavaScript back end too.
+// `needsASocket()` still asks the host for a listener and `skip`s where there is none, so a host
+// without sockets says so on the line where a passing test's timing goes rather than passing a test
+// that asserted nothing.
 
 import { percentDecode } from slate:http
 import { close as closeSocket } from slate:net
